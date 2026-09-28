@@ -1,11 +1,11 @@
-use std::{fs::File, io, path::Path};
+use std::{error::Error, fs::File, io, path::Path};
 use zip::ZipArchive;
 
 // Extracts project.json given a .sb3 path and output path
 pub fn extract_project_json<P: AsRef<Path>>(
     sb3_path: P,
     output_path: P,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn Error>> {
     let file = File::open(sb3_path)?;
     let mut archive = ZipArchive::new(file)?;
 
