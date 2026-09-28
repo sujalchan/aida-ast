@@ -1,0 +1,14 @@
+# Ignore all .sb3s and .jsons anywhere in the repository
+*.sb3
+
+# Ignore extracted or intermediate target files
+extracted_project.json
+*.aida
+
+# Standard Rust / Cargo build outputs
+/target/
+Cargo.lock
+
+# Operating system metadata files
+.DS_Store
+Thumbs.db
