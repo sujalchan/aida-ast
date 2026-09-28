@@ -1,5 +1,6 @@
 # Ignore all .sb3s and .jsons anywhere in the repository
 *.sb3
+*.json
 
 # Ignore extracted or intermediate target files
 extracted_project.json
