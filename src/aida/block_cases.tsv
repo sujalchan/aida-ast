@@ -1,0 +1,179 @@
+# opcode<TAB>kind<TAB>inputs JSON<TAB>fields JSON<TAB>expected AIDA (escaped newlines)
+# Inputs/fields checked against scratch-blocks commit 3faed99e7feb8908687db6cc05236c5b40a668c6.
+# Procedure mutations and calls are tested separately in tests.rs.
+colour_picker	reporter	{}	{"COLOUR":["#123456",null]}	"#123456"
+control_forever	statement	{"SUBSTACK":[2,"body"]}	{}	forever {\n    show\n}
+control_repeat	statement	{"TIMES":[1,[4,"11"]],"SUBSTACK":[2,"body"]}	{}	repeat 11 {\n    show\n}
+control_if	statement	{"CONDITION":[2,null],"SUBSTACK":[2,"body"]}	{}	if false {\n    show\n}
+control_if_else	statement	{"CONDITION":[2,null],"SUBSTACK":[2,"body"],"SUBSTACK2":[2,"else-body"]}	{}	if false {\n    show\n} else {\n    hide\n}
+control_stop	statement	{}	{"STOP_OPTION":["all",null]}	stop "all"
+control_wait	statement	{"DURATION":[1,[4,"11"]]}	{}	wait 11
+control_wait_until	statement	{"CONDITION":[2,null]}	{}	wait_until false
+control_repeat_until	statement	{"CONDITION":[2,null],"SUBSTACK":[2,"body"]}	{}	repeat_until false {\n    show\n}
+control_while	statement	{"CONDITION":[2,null],"SUBSTACK":[2,"body"]}	{}	while false {\n    show\n}
+control_for_each	statement	{"VALUE":[1,[4,"11"]],"SUBSTACK":[2,"body"]}	{"VARIABLE":["score total","var-id"]}	for_each: score_total from 1 through 11 {\n    show\n}
+control_start_as_clone	hat	{}	{}	on clone_start
+control_create_clone_of_menu	reporter	{}	{"CLONE_OPTION":["clone_option choice",null]}	"clone_option choice"
+control_create_clone_of	statement	{"CLONE_OPTION":[1,[4,"11"]]}	{}	create_clone 11
+control_delete_this_clone	statement	{}	{}	delete_clone
+control_get_counter	reporter	{}	{}	counter()
+control_incr_counter	statement	{}	{}	increment_counter
+control_clear_counter	statement	{}	{}	clear_counter
+control_all_at_once	statement	{"SUBSTACK":[2,"body"]}	{}	all_at_once {\n    show\n}
+data_variable	reporter	{}	{"VARIABLE":["score total","var-id"]}	score_total
+data_setvariableto	statement	{"VALUE":[1,[4,"11"]]}	{"VARIABLE":["score total","var-id"]}	set: score_total = 11
+data_changevariableby	statement	{"VALUE":[1,[4,"11"]]}	{"VARIABLE":["score total","var-id"]}	change: score_total by 11
+data_showvariable	statement	{}	{"VARIABLE":["score total","var-id"]}	show_var: score_total
+data_hidevariable	statement	{}	{"VARIABLE":["score total","var-id"]}	hide_var: score_total
+data_listcontents	reporter	{}	{"LIST":["todo items","list-id"]}	list_contents(todo_items)
+data_listindexall	reporter	{}	{"INDEX":["last",null]}	"last"
+data_listindexrandom	reporter	{}	{"INDEX":["random",null]}	"random"
+data_addtolist	statement	{"ITEM":[1,[4,"11"]]}	{"LIST":["todo items","list-id"]}	append: todo_items with 11
+data_deleteoflist	statement	{"INDEX":[1,[4,"11"]]}	{"LIST":["todo items","list-id"]}	delete: todo_items at 11
+data_deletealloflist	statement	{}	{"LIST":["todo items","list-id"]}	clear_list: todo_items
+data_insertatlist	statement	{"ITEM":[1,[4,"11"]],"INDEX":[1,[4,"22"]]}	{"LIST":["todo items","list-id"]}	insert: todo_items at 22 = 11
+data_replaceitemoflist	statement	{"INDEX":[1,[4,"11"]],"ITEM":[1,[4,"22"]]}	{"LIST":["todo items","list-id"]}	replace: todo_items at 11 = 22
+data_itemoflist	reporter	{"INDEX":[1,[4,"11"]]}	{"LIST":["todo items","list-id"]}	item(todo_items, 11)
+data_itemnumoflist	reporter	{"ITEM":[1,[4,"11"]]}	{"LIST":["todo items","list-id"]}	index_of(todo_items, 11)
+data_lengthoflist	reporter	{}	{"LIST":["todo items","list-id"]}	list_length(todo_items)
+data_listcontainsitem	reporter	{"ITEM":[1,[4,"11"]]}	{"LIST":["todo items","list-id"]}	list_contains(todo_items, 11)
+data_showlist	statement	{}	{"LIST":["todo items","list-id"]}	show_list: todo_items
+data_hidelist	statement	{}	{"LIST":["todo items","list-id"]}	hide_list: todo_items
+event_whentouchingobject	hat	{"TOUCHINGOBJECTMENU":[1,[4,"11"]]}	{}	on touching(11)
+event_touchingobjectmenu	reporter	{}	{"TOUCHINGOBJECTMENU":["touchingobjectmenu choice",null]}	"touchingobjectmenu choice"
+event_whenflagclicked	hat	{}	{}	on green_flag
+event_whenthisspriteclicked	hat	{}	{}	on sprite_clicked
+event_whenstageclicked	hat	{}	{}	on stage_clicked
+event_whenbroadcastreceived	hat	{}	{"BROADCAST_OPTION":["broadcast_option choice",null]}	on broadcast("broadcast_option choice")
+event_whenbackdropswitchesto	hat	{}	{"BACKDROP":["backdrop choice",null]}	on backdrop("backdrop choice")
+event_whengreaterthan	hat	{"VALUE":[1,[4,"11"]]}	{"WHENGREATERTHANMENU":["whengreaterthanmenu choice",null]}	on greater_than("whengreaterthanmenu choice", 11)
+event_broadcast_menu	reporter	{}	{"BROADCAST_OPTION":["broadcast_option choice",null]}	"broadcast_option choice"
+event_broadcast	statement	{"BROADCAST_INPUT":[1,[4,"11"]]}	{}	broadcast 11
+event_broadcastandwait	statement	{"BROADCAST_INPUT":[1,[4,"11"]]}	{}	broadcast_and_wait 11
+event_whenkeypressed	hat	{}	{"KEY_OPTION":["key_option choice",null]}	on key_pressed("key_option choice")
+extension_pen_down	statement	{}	{}	pen_down
+extension_music_drum	statement	{"NUMBER":[1,[4,"11"]]}	{}	play_drum 11
+extension_wedo_motor	statement	{}	{}	turn_motor
+extension_wedo_hat	hat	{}	{}	on wearing_hat
+extension_wedo_boolean	reporter	{}	{}	wedo_boolean()
+extension_wedo_tilt_reporter	reporter	{"TILT":[1,[4,"11"]]}	{}	tilt_angle(11)
+extension_wedo_tilt_menu	reporter	{}	{"TILT":["tilt choice",null]}	"tilt choice"
+extension_music_reporter	reporter	{}	{}	music_reporter()
+extension_microbit_display	statement	{"MATRIX":[1,[4,"11"]]}	{}	display_matrix 11
+extension_music_play_note	statement	{"NOTE":[1,[4,"11"]],"BEATS":[1,[4,"22"]]}	{}	play_note 11 for 22 beats
+looks_sayforsecs	statement	{"MESSAGE":[1,[4,"11"]],"SECS":[1,[4,"22"]]}	{}	say 11 for 22 seconds
+looks_say	statement	{"MESSAGE":[1,[4,"11"]]}	{}	say 11
+looks_thinkforsecs	statement	{"MESSAGE":[1,[4,"11"]],"SECS":[1,[4,"22"]]}	{}	think 11 for 22 seconds
+looks_think	statement	{"MESSAGE":[1,[4,"11"]]}	{}	think 11
+looks_show	statement	{}	{}	show
+looks_hide	statement	{}	{}	hide
+looks_hideallsprites	statement	{}	{}	hide_all_sprites
+looks_changeeffectby	statement	{"CHANGE":[1,[4,"11"]]}	{"EFFECT":["effect choice",null]}	change_effect "effect choice" by 11
+looks_seteffectto	statement	{"VALUE":[1,[4,"11"]]}	{"EFFECT":["effect choice",null]}	set_effect "effect choice" to 11
+looks_cleargraphiceffects	statement	{}	{}	clear_effects
+looks_changesizeby	statement	{"CHANGE":[1,[4,"11"]]}	{}	change_size by 11
+looks_setsizeto	statement	{"SIZE":[1,[4,"11"]]}	{}	set_size 11
+looks_size	reporter	{}	{}	size()
+looks_changestretchby	statement	{"CHANGE":[1,[4,"11"]]}	{}	change_stretch by 11
+looks_setstretchto	statement	{"STRETCH":[1,[4,"11"]]}	{}	set_stretch 11
+looks_costume	reporter	{}	{"COSTUME":["costume choice",null]}	"costume choice"
+looks_switchcostumeto	statement	{"COSTUME":[1,[4,"11"]]}	{}	switch_costume 11
+looks_nextcostume	statement	{}	{}	next_costume
+looks_switchbackdropto	statement	{"BACKDROP":[1,[4,"11"]]}	{}	switch_backdrop 11
+looks_backdrops	reporter	{}	{"BACKDROP":["backdrop choice",null]}	"backdrop choice"
+looks_gotofrontback	statement	{}	{"FRONT_BACK":["front_back choice",null]}	go_to_layer "front_back choice"
+looks_goforwardbackwardlayers	statement	{"NUM":[1,[4,"11"]]}	{"FORWARD_BACKWARD":["forward_backward choice",null]}	move_layers "forward_backward choice" by 11
+looks_backdropnumbername	reporter	{}	{"NUMBER_NAME":["number_name choice",null]}	backdrop("number_name choice")
+looks_costumenumbername	reporter	{}	{"NUMBER_NAME":["number_name choice",null]}	costume("number_name choice")
+looks_switchbackdroptoandwait	statement	{"BACKDROP":[1,[4,"11"]]}	{}	switch_backdrop_and_wait 11
+looks_nextbackdrop	statement	{}	{}	next_backdrop
+math_number	reporter	{}	{"NUM":["12",null]}	12
+math_integer	reporter	{}	{"NUM":["12",null]}	12
+math_whole_number	reporter	{}	{"NUM":["12",null]}	12
+math_positive_number	reporter	{}	{"NUM":["12",null]}	12
+math_angle	reporter	{}	{"NUM":["12",null]}	12
+matrix	reporter	{}	{"MATRIX":["0101010101010101010101010",null]}	"0101010101010101010101010"
+motion_movesteps	statement	{"STEPS":[1,[4,"11"]]}	{}	move 11
+motion_turnright	statement	{"DEGREES":[1,[4,"11"]]}	{}	turn_right 11
+motion_turnleft	statement	{"DEGREES":[1,[4,"11"]]}	{}	turn_left 11
+motion_pointindirection	statement	{"DIRECTION":[1,[4,"11"]]}	{}	point_direction 11
+motion_pointtowards_menu	reporter	{}	{"TOWARDS":["towards choice",null]}	"towards choice"
+motion_pointtowards	statement	{"TOWARDS":[1,[4,"11"]]}	{}	point_towards 11
+motion_goto_menu	reporter	{}	{"TO":["to choice",null]}	"to choice"
+motion_gotoxy	statement	{"X":[1,[4,"11"]],"Y":[1,[4,"22"]]}	{}	go_to x: 11, y: 22
+motion_goto	statement	{"TO":[1,[4,"11"]]}	{}	go_to 11
+motion_glidesecstoxy	statement	{"SECS":[1,[4,"11"]],"X":[1,[4,"22"]],"Y":[1,[4,"33"]]}	{}	glide 11 seconds to x: 22, y: 33
+motion_glideto_menu	reporter	{}	{"TO":["to choice",null]}	"to choice"
+motion_glideto	statement	{"SECS":[1,[4,"11"]],"TO":[1,[4,"22"]]}	{}	glide 11 seconds to 22
+motion_changexby	statement	{"DX":[1,[4,"11"]]}	{}	change_x by 11
+motion_setx	statement	{"X":[1,[4,"11"]]}	{}	set_x 11
+motion_changeyby	statement	{"DY":[1,[4,"11"]]}	{}	change_y by 11
+motion_sety	statement	{"Y":[1,[4,"11"]]}	{}	set_y 11
+motion_ifonedgebounce	statement	{}	{}	bounce_on_edge
+motion_setrotationstyle	statement	{}	{"STYLE":["style choice",null]}	set_rotation_style "style choice"
+motion_xposition	reporter	{}	{}	x_position()
+motion_yposition	reporter	{}	{}	y_position()
+motion_direction	reporter	{}	{}	direction()
+motion_scroll_right	statement	{"DISTANCE":[1,[4,"11"]]}	{}	scroll_right 11
+motion_scroll_up	statement	{"DISTANCE":[1,[4,"11"]]}	{}	scroll_up 11
+motion_align_scene	statement	{}	{"ALIGNMENT":["alignment choice",null]}	align_scene "alignment choice"
+motion_xscroll	reporter	{}	{}	x_scroll()
+motion_yscroll	reporter	{}	{}	y_scroll()
+note	reporter	{}	{"NOTE":[60,null]}	60
+operator_add	reporter	{"NUM1":[1,[4,"11"]],"NUM2":[1,[4,"22"]]}	{}	11 + 22
+operator_subtract	reporter	{"NUM1":[1,[4,"11"]],"NUM2":[1,[4,"22"]]}	{}	11 - 22
+operator_multiply	reporter	{"NUM1":[1,[4,"11"]],"NUM2":[1,[4,"22"]]}	{}	11 * 22
+operator_divide	reporter	{"NUM1":[1,[4,"11"]],"NUM2":[1,[4,"22"]]}	{}	11 / 22
+operator_random	reporter	{"FROM":[1,[4,"11"]],"TO":[1,[4,"22"]]}	{}	random(11, 22)
+operator_lt	reporter	{"OPERAND1":[1,[4,"11"]],"OPERAND2":[1,[4,"22"]]}	{}	11 < 22
+operator_equals	reporter	{"OPERAND1":[1,[4,"11"]],"OPERAND2":[1,[4,"22"]]}	{}	11 == 22
+operator_gt	reporter	{"OPERAND1":[1,[4,"11"]],"OPERAND2":[1,[4,"22"]]}	{}	11 > 22
+operator_and	reporter	{"OPERAND1":[2,null],"OPERAND2":[2,null]}	{}	false && false
+operator_or	reporter	{"OPERAND1":[2,null],"OPERAND2":[2,null]}	{}	false || false
+operator_not	reporter	{"OPERAND":[2,null]}	{}	!false
+operator_join	reporter	{"STRING1":[1,[4,"11"]],"STRING2":[1,[4,"22"]]}	{}	join(11, 22)
+operator_letter_of	reporter	{"LETTER":[1,[4,"11"]],"STRING":[1,[4,"22"]]}	{}	letter(11, 22)
+operator_length	reporter	{"STRING":[1,[4,"11"]]}	{}	length(11)
+operator_contains	reporter	{"STRING1":[1,[4,"11"]],"STRING2":[1,[4,"22"]]}	{}	contains(11, 22)
+operator_mod	reporter	{"NUM1":[1,[4,"11"]],"NUM2":[1,[4,"22"]]}	{}	mod(11, 22)
+operator_round	reporter	{"NUM":[1,[4,"11"]]}	{}	round(11)
+operator_mathop	reporter	{"NUM":[1,[4,"11"]]}	{"OPERATOR":["operator choice",null]}	math("operator choice", 11)
+argument_reporter_boolean	reporter	{}	{"VALUE":["arg name",null]}	argument(arg_name)
+argument_reporter_string_number	reporter	{}	{"VALUE":["arg name",null]}	argument(arg_name)
+argument_editor_boolean	reporter	{}	{"VALUE":["arg name",null]}	argument(arg_name)
+argument_editor_string_number	reporter	{}	{"VALUE":["arg name",null]}	argument(arg_name)
+sensing_touchingobject	reporter	{"TOUCHINGOBJECTMENU":[1,[4,"11"]]}	{}	touching(11)
+sensing_touchingobjectmenu	reporter	{}	{"TOUCHINGOBJECTMENU":["touchingobjectmenu choice",null]}	"touchingobjectmenu choice"
+sensing_touchingcolor	reporter	{"COLOR":[1,[4,"11"]]}	{}	touching_color(11)
+sensing_coloristouchingcolor	reporter	{"COLOR":[1,[4,"11"]],"COLOR2":[1,[4,"22"]]}	{}	color_touching_color(11, 22)
+sensing_distanceto	reporter	{"DISTANCETOMENU":[1,[4,"11"]]}	{}	distance_to(11)
+sensing_distancetomenu	reporter	{}	{"DISTANCETOMENU":["distancetomenu choice",null]}	"distancetomenu choice"
+sensing_askandwait	statement	{"QUESTION":[1,[4,"11"]]}	{}	ask_and_wait 11
+sensing_answer	reporter	{}	{}	answer()
+sensing_keypressed	reporter	{"KEY_OPTION":[1,[4,"11"]]}	{}	key_pressed(11)
+sensing_keyoptions	reporter	{}	{"KEY_OPTION":["key_option choice",null]}	"key_option choice"
+sensing_mousedown	reporter	{}	{}	mouse_down()
+sensing_mousex	reporter	{}	{}	mouse_x()
+sensing_mousey	reporter	{}	{}	mouse_y()
+sensing_setdragmode	statement	{}	{"DRAG_MODE":["drag_mode choice",null]}	set_drag_mode "drag_mode choice"
+sensing_loudness	reporter	{}	{}	loudness()
+sensing_loud	reporter	{}	{}	loud()
+sensing_timer	reporter	{}	{}	timer()
+sensing_resettimer	statement	{}	{}	reset_timer
+sensing_of_object_menu	reporter	{}	{"OBJECT":["object choice",null]}	"object choice"
+sensing_of	reporter	{"OBJECT":[1,[4,"11"]]}	{"PROPERTY":["property choice",null]}	property("property choice", 11)
+sensing_current	reporter	{}	{"CURRENTMENU":["currentmenu choice",null]}	current("currentmenu choice")
+sensing_dayssince2000	reporter	{}	{}	days_since_2000()
+sensing_username	reporter	{}	{}	username()
+sensing_userid	reporter	{}	{}	user_id()
+sound_sounds_menu	reporter	{}	{"SOUND_MENU":["Meow",null]}	"Meow"
+sound_play	statement	{"SOUND_MENU":[1,[4,"11"]]}	{}	play_sound 11
+sound_playuntildone	statement	{"SOUND_MENU":[1,[4,"11"]]}	{}	play_sound_until_done 11
+sound_stopallsounds	statement	{}	{}	stop_all_sounds
+sound_seteffectto	statement	{"VALUE":[1,[4,"11"]]}	{"EFFECT":["effect choice",null]}	set_sound_effect "effect choice" to 11
+sound_changeeffectby	statement	{"VALUE":[1,[4,"11"]]}	{"EFFECT":["effect choice",null]}	change_sound_effect "effect choice" by 11
+sound_cleareffects	statement	{}	{}	clear_sound_effects
+sound_changevolumeby	statement	{"VOLUME":[1,[4,"11"]]}	{}	change_volume by 11
+sound_setvolumeto	statement	{"VOLUME":[1,[4,"11"]]}	{}	set_volume 11
+sound_volume	reporter	{}	{}	volume()
+text	reporter	{}	{"TEXT":["hello world",null]}	"hello world"

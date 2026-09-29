@@ -15,7 +15,6 @@
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::error::Error;
 
 #[derive(Debug, Deserialize)]
 pub struct ScratchProject {
@@ -28,10 +27,27 @@ pub struct ScratchTarget {
     #[serde(rename = "isStage")]
     pub is_stage: bool,
 
+    #[serde(default, deserialize_with = "deserialize_blocks")]
     pub blocks: HashMap<String, ScratchBlock>,
 
     #[serde(default)]
     pub variables: HashMap<String, ScratchVariable>,
+
+    #[serde(default)]
+    pub lists: HashMap<String, ScratchList>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(from = "(String, Vec<Value>)")]
+pub struct ScratchList {
+    pub name: String,
+    pub items: Vec<Value>,
+}
+
+impl From<(String, Vec<Value>)> for ScratchList {
+    fn from((name, items): (String, Vec<Value>)) -> Self {
+        Self { name, items }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,29 +82,134 @@ impl From<ScratchVariableData> for ScratchVariable {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct ScratchBlock {
     pub opcode: String,
 
     pub next: Option<String>,
     pub parent: Option<String>,
 
+    #[serde(default)]
     pub inputs: HashMap<String, Value>,
+    #[serde(default)]
     pub fields: HashMap<String, Value>,
 
+    #[serde(default)]
     pub shadow: bool,
 
-    #[serde(rename = "topLevel")]
+    #[serde(default, rename = "topLevel")]
     pub top_level: bool,
 
     pub x: Option<f64>,
     pub y: Option<f64>,
+
+    #[serde(default)]
+    pub mutation: Value,
+}
+
+// SB3 stores loose variable/list reporters as compact arrays, not block objects.
+// Normalize these to ordinary blocks while retaining both block and variable IDs.
+fn deserialize_blocks<'de, D>(deserializer: D) -> Result<HashMap<String, ScratchBlock>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let entries = HashMap::<String, Value>::deserialize(deserializer)?;
+    entries
+        .into_iter()
+        .map(|(id, value)| {
+            let block = if let Some(primitive) = value.as_array() {
+                let (opcode, field) = match primitive.first().and_then(Value::as_u64) {
+                    Some(12) => ("data_variable", "VARIABLE"),
+                    Some(13) => ("data_listcontents", "LIST"),
+                    _ => {
+                        return Err(serde::de::Error::custom(format!(
+                            "invalid compact block: {id}"
+                        )));
+                    }
+                };
+                let name = primitive.get(1).and_then(Value::as_str);
+                let reference = primitive.get(2).and_then(Value::as_str);
+                let (Some(name), Some(reference)) = (name, reference) else {
+                    return Err(serde::de::Error::custom(format!(
+                        "invalid reference in block: {id}"
+                    )));
+                };
+                ScratchBlock {
+                    opcode: opcode.to_owned(),
+                    fields: HashMap::from([(
+                        field.to_owned(),
+                        serde_json::json!([name, reference]),
+                    )]),
+                    top_level: true,
+                    x: primitive.get(3).and_then(Value::as_f64),
+                    y: primitive.get(4).and_then(Value::as_f64),
+                    ..Default::default()
+                }
+            } else {
+                serde_json::from_value(value).map_err(serde::de::Error::custom)?
+            };
+            Ok((id, block))
+        })
+        .collect()
+}
+
+#[derive(Debug)]
+pub struct ScratchReference<'a> {
+    pub name: &'a str,
+    pub id: &'a str,
+}
+
+#[derive(Debug)]
+pub enum InputValue<'a> {
+    Empty,
+    Number(&'a Value),
+    String(&'a Value),
+    BlockReference(&'a str),
+    VariableReference(ScratchReference<'a>),
+    ListReference(ScratchReference<'a>),
+}
+
+/// Decode the active input. An obscured shadow at index 2 is not its value.
+pub fn parse_input(input: &Value) -> Option<InputValue<'_>> {
+    let input = input.as_array()?;
+    if !matches!(input.first()?.as_u64()?, 1..=3) {
+        return None;
+    }
+    let value = input.get(1)?;
+    if value.is_null() {
+        return Some(InputValue::Empty);
+    }
+    if let Some(id) = value.as_str() {
+        return Some(InputValue::BlockReference(id));
+    }
+
+    let primitive = value.as_array()?;
+    let code = primitive.first()?.as_u64()?;
+    let value = primitive.get(1)?;
+    match code {
+        4..=8 => Some(InputValue::Number(value)),
+        9..=11 => Some(InputValue::String(value)),
+        12 | 13 => {
+            let reference = ScratchReference {
+                name: value.as_str()?,
+                id: primitive.get(2)?.as_str()?,
+            };
+            if code == 12 {
+                Some(InputValue::VariableReference(reference))
+            } else {
+                Some(InputValue::ListReference(reference))
+            }
+        }
+        _ => None,
+    }
+}
+
+pub fn parse_project(json_str: &str) -> Result<ScratchProject, serde_json::Error> {
+    serde_json::from_str(json_str)
 }
 
 // Print the targets found
-pub fn print_targets(json_str: &str) -> Result<(), Box<dyn Error>> {
-    let project: ScratchProject = serde_json::from_str(json_str)?;
-
+pub fn print_project(project: &ScratchProject) {
     let total_targets = project.targets.len();
 
     // Get sprite count by filtering out the Stage
@@ -115,9 +236,12 @@ pub fn print_targets(json_str: &str) -> Result<(), Box<dyn Error>> {
             println!("   {kind}: {} ({id}) = {}", variable.name, variable.value);
         }
 
+        for (id, list) in &target.lists {
+            println!("   List: {} ({id}) = {:?}", list.name, list.items);
+        }
+
         print_blocks(target);
     }
-    Ok(())
 }
 
 // Print block data
@@ -142,29 +266,28 @@ pub fn print_blocks(target: &ScratchTarget) {
     }
 
     fn print_input(name: &str, input: &Value, target: &ScratchTarget) {
-        let Some(value) = input.get(1) else {
-            return;
-        };
-
-        // primitive input such as [4, "5"]
-        if let Some(primitive) = value.as_array() {
-            if let Some(data) = primitive.get(1) {
+        match parse_input(input) {
+            Some(InputValue::Empty) => println!("    {name}: (empty)"),
+            Some(InputValue::Number(data) | InputValue::String(data)) => {
                 if let Some(text) = data.as_str() {
                     println!("    {name}: {text}");
                 } else {
                     println!("    {name}: {data}");
                 }
             }
-            return;
-        }
-
-        // block reference such as "abc123"
-        if let Some(block_id) = value.as_str() {
-            if let Some(block) = target.blocks.get(block_id) {
-                println!("    {name}: {} ({block_id})", block.opcode);
-            } else {
-                println!("    {name}: unknown block ({block_id})");
+            Some(InputValue::BlockReference(block_id)) => {
+                if let Some(block) = target.blocks.get(block_id) {
+                    println!("    {name}: {} ({block_id})", block.opcode);
+                } else {
+                    println!("    {name}: unknown block ({block_id})");
+                }
             }
+            Some(
+                InputValue::VariableReference(reference) | InputValue::ListReference(reference),
+            ) => {
+                println!("    {name}: {} ({})", reference.name, reference.id);
+            }
+            None => println!("    {name}: unknown input {input}"),
         }
     }
 }

@@ -14,19 +14,25 @@
 
 use std::{error::Error, fs};
 
+mod aida;
 mod extractor;
 mod parser;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let sb3_input = "example.sb3";
     let json_output = "project.json";
+    let aida_output = "project.aida";
 
     extractor::extract_project_json(sb3_input, json_output)?;
     println!("Extracted {json_output} from {sb3_input}");
 
     let json_str = fs::read_to_string(json_output)?;
 
-    parser::print_targets(&json_str)?;
+    let project = parser::parse_project(&json_str)?;
+    parser::print_project(&project);
+
+    fs::write(aida_output, aida::generate(&project))?;
+    println!("Generated {aida_output}");
 
     Ok(())
 }
