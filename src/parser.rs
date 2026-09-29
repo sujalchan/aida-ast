@@ -149,9 +149,12 @@ pub fn print_blocks(target: &ScratchTarget) {
         // primitive input such as [4, "5"]
         if let Some(primitive) = value.as_array() {
             if let Some(data) = primitive.get(1) {
-                println!("    {name}: {data}");
+                if let Some(text) = data.as_str() {
+                    println!("    {name}: {text}");
+                } else {
+                    println!("    {name}: {data}");
+                }
             }
-
             return;
         }
 
