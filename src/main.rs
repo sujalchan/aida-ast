@@ -16,6 +16,7 @@ use std::{error::Error, fs};
 
 mod extractor;
 mod parser;
+mod value;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let sb3_input = "example.sb3";
