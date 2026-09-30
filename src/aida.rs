@@ -473,6 +473,8 @@ impl<'a> TargetGenerator<'a> {
                 self.symbol_field(block, field, true)
             } else if let Some(input) = key.strip_prefix('?') {
                 self.boolean_input(block, input, active).text
+            } else if key == "INDEX" {
+                self.list_index(block.inputs.get(key), active).text
             } else {
                 self.input_expression(block.inputs.get(key), active).text
             };
@@ -481,6 +483,16 @@ impl<'a> TargetGenerator<'a> {
         }
         output.push_str(rest);
         output
+    }
+
+    fn list_index(&self, input: Option<&Value>, active: &mut HashSet<String>) -> Expression {
+        // Scratch saves its special list selectors in numeric shadow slots.
+        if let Some(InputValue::Number(value)) = input.and_then(parse_input) {
+            if matches!(value.as_str(), Some("last" | "all" | "random" | "any")) {
+                return text_literal(value);
+            }
+        }
+        self.input_expression(input, active)
     }
 
     fn symbol_field(&self, block: &ScratchBlock, field: &str, list: bool) -> String {
@@ -592,6 +604,10 @@ fn number_literal(value: &Value) -> Expression {
     }
     if let Some(text) = value.as_str() {
         let text = text.trim();
+        // A blank numeric socket is zero in Scratch, not a missing input.
+        if text.is_empty() {
+            return Expression::atom("0".to_owned());
+        }
         if let Ok(number) = serde_json::from_str::<serde_json::Number>(text) {
             return Expression::atom(number.to_string());
         }

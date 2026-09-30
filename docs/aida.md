@@ -3,6 +3,8 @@
 `cargo run` reads `example.sb3`, keeps the existing console debug output, and
 writes `project.aida`.
 
+For VS Code syntax highlighting, see the [AIDA extension](../editors/vscode/README.md).
+
 ## Names and values
 
 ```text
@@ -22,6 +24,8 @@ Cloud declarations use `cloud var:`. Stage and sprite display names remain quote
 
 String **values** keep their quotes and their original content, including spaces.
 Numeric primitive tags produce numbers, even when the JSON stores them as strings.
+Blank numeric sockets become zero. Special list indexes such as `last`, `all` and
+`random` remain selectors even when Scratch stores them in numeric shadow slots.
 Text primitive tags keep text, even when it looks numeric. Expressions are preserved;
 the generator does not evaluate `join`, arithmetic, or Scratch's runtime conversions.
 
@@ -48,8 +52,11 @@ Declarations render as `declare:` signatures; argument editor/reporters use
 defaults and warp flag. They do not become executable scripts on their own.
 
 The listed `extension_*` names come from Scratch Blocks' extension demonstrations.
-They have readable AIDA representations. Modern VM extension opcodes such as
-`music_playDrumForBeats` are separate names and require separate mappings.
+They have readable AIDA representations. The generator also supports all 14
+serialized [Scratch 3 Pen blocks and menu](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/extensions/scratch3_pen/index.js),
+including `pen_penDown`, `pen_penUp`, clear, stamp, color, size, and legacy hue/shade
+commands. Other VM extension opcodes such as `music_playDrumForBeats` are separate
+names and require separate mappings.
 This project generates an intermediate representation; it does not execute blocks
 or operate extension hardware. Legacy blocks are preserved as corresponding AIDA
 operations, without inventing execution behavior for them.
@@ -78,6 +85,11 @@ Calls retain the argument order from procedure mutation IDs. Recursive calls rem
 calls. `%s` parameters use `value` (Scratch permits strings and numbers), `%n` uses
 `number`, and `%b` uses `bool`. `warp` records execution without screen refresh.
 The `for_each:` range uses `from 1 through value` to include the upper bound.
+
+Saved procedure metadata can contain trailing defaults for parameters that no
+longer exist. Definitions use only defaults corresponding to current argument IDs,
+matching [Scratch's procedure argument handling](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_procedures.js).
+Extra defaults do not cause the definition or its body to be omitted.
 
 Unknown opcodes, missing references, malformed inputs and graph cycles produce
 visible `unknown` placeholders. Invalid compact variable/list records return a

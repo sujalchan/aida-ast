@@ -739,3 +739,104 @@ fn all_primitive_tags_keep_the_active_value_and_type() {
         }
     }
 }
+
+#[test]
+fn surplus_procedure_defaults_do_not_discard_definitions_or_bodies() {
+    let mut project = procedure_project();
+    let baseline = generate(&project);
+    let blocks = &mut project.targets[0].blocks;
+    blocks.get_mut("prototype").unwrap().mutation["argumentdefaults"] =
+        json!("[\"\",false,\"stale\",123]");
+    assert_eq!(generate(&project), baseline);
+
+    let mut definition = block(
+        "procedures_definition",
+        &[("custom_block", reference("zero"))],
+    );
+    definition.top_level = true;
+    definition.next = Some("body".to_owned());
+    let mut prototype = block("procedures_prototype", &[]);
+    prototype.mutation = json!({"proccode":"No arguments", "argumentids":"[]",
+        "argumentnames":"[]", "argumentdefaults":"[\"stale\",\"stale\"]"});
+    let output = generate(&ScratchProject {
+        targets: vec![target(vec![
+            ("definition", definition),
+            ("zero", prototype),
+            ("body", block("pen_stamp", &[])),
+        ])],
+    });
+    assert!(output.contains("define: No_arguments() {\n            stamp\n"));
+    assert!(!output.contains("unknown"));
+
+    project.targets[0]
+        .blocks
+        .get_mut("prototype")
+        .unwrap()
+        .mutation["argumentdefaults"] = json!("[]");
+    assert!(generate(&project).contains("invalid procedure argument names or defaults"));
+}
+
+#[test]
+fn pen_commands_keep_nested_inputs_and_special_list_indexes() {
+    let mut sprite = target(vec![
+        ("hat", hat("color")),
+        (
+            "color",
+            block(
+                "pen_setPenColorToColor",
+                &[("COLOR", json!([1, [9, "#123456"]]))],
+            ),
+        ),
+        (
+            "size",
+            block("pen_setPenSizeTo", &[("SIZE", reference("sum"))]),
+        ),
+        (
+            "sum",
+            block(
+                "operator_add",
+                &[("NUM1", number("2")), ("NUM2", number(""))],
+            ),
+        ),
+        ("menu", block("pen_menu_colorParam", &[])),
+        (
+            "param",
+            block(
+                "pen_setPenColorParamTo",
+                &[("COLOR_PARAM", reference("menu")), ("VALUE", number("50"))],
+            ),
+        ),
+    ]);
+    sprite
+        .blocks
+        .get_mut("menu")
+        .unwrap()
+        .fields
+        .insert("colorParam".to_owned(), json!(["transparency", null]));
+    sprite.blocks.get_mut("color").unwrap().next = Some("size".to_owned());
+    sprite.blocks.get_mut("size").unwrap().next = Some("param".to_owned());
+    let output = generate(&ScratchProject {
+        targets: vec![sprite],
+    });
+    assert!(output.contains(concat!(
+        "set_pen_color \"#123456\"\n",
+        "            set_pen_size 2 + 0\n",
+        "            set_pen_color \"transparency\" to 50\n"
+    )));
+
+    for selector in ["last", "all", "random", "any"] {
+        let mut delete = block("data_deleteoflist", &[("INDEX", json!([1, [7, selector]]))]);
+        delete
+            .fields
+            .insert("LIST".to_owned(), json!(["items", "list-id"]));
+        let project = ScratchProject {
+            targets: vec![target(vec![("hat", hat("delete")), ("delete", delete)])],
+        };
+        assert!(generate(&project).contains(&format!("delete: items at \"{selector}\"")));
+    }
+    assert_eq!(number_literal(&json!(" \t")).text, "0");
+    assert_eq!(
+        number_literal(&json!("last")).text,
+        "unknown(\"invalid numeric literal\")"
+    );
+}

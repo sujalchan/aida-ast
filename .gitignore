@@ -13,3 +13,9 @@ Cargo.lock
 # Operating system metadata files
 .DS_Store
 Thumbs.db
+
+# Keep the VS Code extension's source files and highlighting sample.
+!/editors/vscode/**/*.json
+!/editors/vscode/examples/*.aida
+/editors/vscode/node_modules/
+/editors/vscode/*.vsix

@@ -1,0 +1,58 @@
+{
+  "name": "aida-language",
+  "displayName": "AIDA Language",
+  "description": "Syntax highlighting and bracket matching for AIDA (.aida) files.",
+  "version": "0.1.0",
+  "publisher": "sujalchan",
+  "license": "SEE LICENSE IN LICENSE",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "aida",
+    "scratch",
+    "syntax highlighting"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sujalchan/aida-ast.git",
+    "directory": "editors/vscode"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": true
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "aida",
+        "aliases": [
+          "AIDA",
+          "aida"
+        ],
+        "extensions": [
+          ".aida"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "aida",
+        "scopeName": "source.aida",
+        "path": "./syntaxes/aida.tmLanguage.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[aida]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+      }
+    }
+  }
+}

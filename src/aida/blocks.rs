@@ -91,6 +91,22 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "extension_microbit_display" => Statement("display_matrix {MATRIX}"),
         "extension_music_play_note" => Statement("play_note {NOTE} for {BEATS} beats"),
 
+        // Serialized Scratch 3 Pen extension opcodes, including legacy blocks.
+        "pen_clear" => Statement("clear_pen"),
+        "pen_stamp" => Statement("stamp"),
+        "pen_penDown" => Statement("pen_down"),
+        "pen_penUp" => Statement("pen_up"),
+        "pen_setPenColorToColor" => Statement("set_pen_color {COLOR}"),
+        "pen_changePenColorParamBy" => Statement("change_pen_color {COLOR_PARAM} by {VALUE}"),
+        "pen_setPenColorParamTo" => Statement("set_pen_color {COLOR_PARAM} to {VALUE}"),
+        "pen_menu_colorParam" => TextField("colorParam"),
+        "pen_changePenSizeBy" => Statement("change_pen_size by {SIZE}"),
+        "pen_setPenSizeTo" => Statement("set_pen_size {SIZE}"),
+        "pen_setPenShadeToNumber" => Statement("set_pen_shade {SHADE}"),
+        "pen_changePenShadeBy" => Statement("change_pen_shade by {SHADE}"),
+        "pen_setPenHueToNumber" => Statement("set_pen_hue {HUE}"),
+        "pen_changePenHueBy" => Statement("change_pen_hue by {HUE}"),
+
         "looks_sayforsecs" => Statement("say {MESSAGE} for {SECS} seconds"),
         "looks_say" => Statement("say {MESSAGE}"),
         "looks_thinkforsecs" => Statement("think {MESSAGE} for {SECS} seconds"),

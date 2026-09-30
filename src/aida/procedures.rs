@@ -82,8 +82,10 @@ impl TargetGenerator<'_> {
 
     pub(super) fn procedure_header(&self, block: &ScratchBlock) -> Result<String, String> {
         let procedure = self.procedure(block)?;
+        // Saved projects can retain defaults for removed parameters. Scratch
+        // iterates argument IDs and ignores these trailing defaults.
         if procedure.names.len() != procedure.ids.len()
-            || procedure.defaults.len() != procedure.ids.len()
+            || procedure.defaults.len() < procedure.ids.len()
         {
             return Err("invalid procedure argument names or defaults".to_owned());
         }
