@@ -3,9 +3,19 @@
 `cargo run` reads `example.sb3`, keeps the existing console debug output, and
 writes `project.aida`.
 
-`cargo run -- --tests` compiles every `.sb3` file directly inside `tests/src`
-and writes a matching `.rs` file into `tests/output`. The output directory is
-created automatically. The scan includes files directly inside `tests/src`.
+`cargo run -- --tests` generates Rust source for every `.sb3` file directly
+inside `tests/src` and writes a matching `.rs` file into `tests/output`. The
+output directory is created automatically. Generated functions call the
+`ScratchValue` helpers from `aida-runtime` (`scratch_add`, `scratch_equals`,
+`scratch_greater_than`, `scratch_join`, and related operations). Include the
+generated file as a module in the runtime crate and call its `run()` function.
+The scan includes files directly inside `tests/src`.
+See the [generated Rust and runtime API spec](runtime-api.md) for the module
+contract and current lowering coverage.
+
+`aida-ast --runtime <output.rs> <input.sb3>` writes generated Rust to the given
+path. The repository's `./run.sh [input.sb3]` uses this mode to replace
+`aida-runtime/src/program.rs`, then builds and runs `aida-runtime`.
 
 For VS Code syntax highlighting, see the [AIDA extension](../editors/vscode/README.md).
 
@@ -106,7 +116,8 @@ parse error. Original Scratch IDs and procedure mutation data remain in the pars
 ## Files
 
 - `src/parser.rs`: targets, variables, lists, blocks, procedure metadata and input decoding.
-- `src/aida.rs`: naming, target output, graph traversal and nested expressions.
+- `src/aida.rs`: AIDA output, naming, graph traversal and nested expressions.
+- `src/rust.rs`: Rust output using the runtime's `ScratchValue` operator API.
 - `src/aida/blocks.rs`: ordinary commands, reporters, menus and hats.
 - `src/aida/procedures.rs`: procedure signatures, arguments and calls.
 - `src/aida/tests.rs` and `block_cases.tsv`: regression and coverage checks.
