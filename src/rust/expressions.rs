@@ -25,14 +25,25 @@ use crate::parser::{InputValue, ScratchBlock, ScratchTarget, parse_input};
 
 use super::{
     literals::{field_value, number_literal, quote, text_literal},
+    project::{ListInfo, VariableInfo},
     statements::variable_field,
 };
+
+fn list_field(
+    block: &ScratchBlock,
+    field: &str,
+    lists: &HashMap<String, ListInfo>,
+) -> Option<ListInfo> {
+    let data = block.fields.get(field)?.as_array()?;
+    lists.get(data.get(1)?.as_str()?).cloned()
+}
 
 // convert a scratch input into a rust value expression, following reporter links recursively.
 pub(super) fn expression(
     target: &ScratchTarget,
     input: Option<&Value>,
-    variables: &HashMap<String, String>,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
     arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
@@ -41,7 +52,7 @@ pub(super) fn expression(
         Some(InputValue::String(value)) => text_literal(value),
         Some(InputValue::VariableReference(reference)) => variables
             .get(reference.id)
-            .map(|name| format!("&{name}"))
+            .map(|variable| format!("state.get({})", variable.slot))
             .unwrap_or_else(|| unsupported_expression("unknown variable")),
         Some(InputValue::BlockReference(id)) => {
             if !active.insert(id.to_owned()) {
@@ -50,15 +61,16 @@ pub(super) fn expression(
             let result = target
                 .blocks
                 .get(id)
-                .map(|block| block_expression(target, block, variables, arguments, active))
+                .map(|block| block_expression(target, block, variables, lists, arguments, active))
                 .unwrap_or_else(|| unsupported_expression(&format!("missing block: {id}")));
             active.remove(id);
             result
         }
         Some(InputValue::Empty) => unsupported_expression("empty input"),
-        Some(InputValue::ListReference(_)) => {
-            unsupported_expression("list values are not implemented")
-        }
+        Some(InputValue::ListReference(reference)) => lists
+            .get(reference.id)
+            .map(|list| format!("state.list({}).contents()", list.slot))
+            .unwrap_or_else(|| unsupported_expression("unknown list")),
         None => unsupported_expression("missing or invalid input"),
     }
 }
@@ -67,12 +79,20 @@ pub(super) fn expression(
 fn block_expression(
     target: &ScratchTarget,
     block: &ScratchBlock,
-    variables: &HashMap<String, String>,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
     arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
     let input = |name: &str, active: &mut HashSet<String>| {
-        expression(target, block.inputs.get(name), variables, arguments, active)
+        expression(
+            target,
+            block.inputs.get(name),
+            variables,
+            lists,
+            arguments,
+            active,
+        )
     };
     let binary = |function: &str, left: &str, right: &str, active: &mut HashSet<String>| {
         format!(
@@ -92,13 +112,21 @@ fn block_expression(
         "operator_lt" => binary("scratch_less_than", "OPERAND1", "OPERAND2", active),
         "operator_and" => format!(
             "scratch_and({}, {})",
-            boolean_input(target, block, "OPERAND1", variables, arguments, active),
-            boolean_input(target, block, "OPERAND2", variables, arguments, active)
+            boolean_input(
+                target, block, "OPERAND1", variables, lists, arguments, active
+            ),
+            boolean_input(
+                target, block, "OPERAND2", variables, lists, arguments, active
+            )
         ),
         "operator_or" => format!(
             "scratch_or({}, {})",
-            boolean_input(target, block, "OPERAND1", variables, arguments, active),
-            boolean_input(target, block, "OPERAND2", variables, arguments, active)
+            boolean_input(
+                target, block, "OPERAND1", variables, lists, arguments, active
+            ),
+            boolean_input(
+                target, block, "OPERAND2", variables, lists, arguments, active
+            )
         ),
         "operator_join" => binary("scratch_join", "STRING1", "STRING2", active),
         "operator_letter_of" => binary("scratch_letter", "LETTER", "STRING", active),
@@ -107,7 +135,9 @@ fn block_expression(
         "operator_round" => format!("scratch_round({})", input("NUM", active)),
         "operator_not" => format!(
             "scratch_not({})",
-            boolean_input(target, block, "OPERAND", variables, arguments, active)
+            boolean_input(
+                target, block, "OPERAND", variables, lists, arguments, active
+            )
         ),
         "operator_random" => format!(
             "scratch_random({}, {})",
@@ -115,15 +145,50 @@ fn block_expression(
                 target,
                 block.inputs.get("FROM"),
                 variables,
+                lists,
                 arguments,
                 active,
             ),
-            random_argument(target, block.inputs.get("TO"), variables, arguments, active,)
+            random_argument(
+                target,
+                block.inputs.get("TO"),
+                variables,
+                lists,
+                arguments,
+                active,
+            )
         ),
-        "operator_mathop" => math_expression(target, block, variables, arguments, active),
+        "operator_mathop" => math_expression(target, block, variables, lists, arguments, active),
         "data_variable" => variable_field(block, "VARIABLE", variables)
-            .map(|name| format!("&{name}"))
+            .map(|variable| format!("state.get({})", variable.slot))
             .unwrap_or_else(|| unsupported_expression("missing variable reference")),
+        "data_listcontents" => list_field(block, "LIST", lists)
+            .map(|list| format!("state.list({}).contents()", list.slot))
+            .unwrap_or_else(|| unsupported_expression("missing list reference")),
+        "data_itemoflist" => list_field(block, "LIST", lists)
+            .map(|list| format!("state.list({}).get({})", list.slot, input("INDEX", active)))
+            .unwrap_or_else(|| unsupported_expression("missing list reference")),
+        "data_lengthoflist" => list_field(block, "LIST", lists)
+            .map(|list| format!("state.list({}).length() as f64", list.slot))
+            .unwrap_or_else(|| unsupported_expression("missing list reference")),
+        "data_itemnumoflist" => list_field(block, "LIST", lists)
+            .map(|list| {
+                format!(
+                    "state.list({}).item_number({}) as f64",
+                    list.slot,
+                    input("ITEM", active)
+                )
+            })
+            .unwrap_or_else(|| unsupported_expression("missing list reference")),
+        "data_listcontainsitem" => list_field(block, "LIST", lists)
+            .map(|list| {
+                format!(
+                    "state.list({}).contains({})",
+                    list.slot,
+                    input("ITEM", active)
+                )
+            })
+            .unwrap_or_else(|| unsupported_expression("missing list reference")),
         "argument_reporter_string_number" | "argument_reporter_boolean" => {
             field_value(block, "VALUE")
                 .and_then(Value::as_str)
@@ -149,7 +214,8 @@ fn block_expression(
 fn math_expression(
     target: &ScratchTarget,
     block: &ScratchBlock,
-    variables: &HashMap<String, String>,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
     arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
@@ -157,6 +223,7 @@ fn math_expression(
         target,
         block.inputs.get("NUM"),
         variables,
+        lists,
         arguments,
         active,
     );
@@ -221,7 +288,8 @@ fn numeric_literal(target: &ScratchTarget, input: Option<&Value>) -> Option<Stri
 fn random_argument(
     target: &ScratchTarget,
     input: Option<&Value>,
-    variables: &HashMap<String, String>,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
     arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
@@ -230,10 +298,10 @@ fn random_argument(
             .as_str()
             .map(|text| quote(text))
             .or_else(|| value.as_number().map(|number| quote(&number.to_string())))
-            .unwrap_or_else(|| expression(target, input, variables, arguments, active)),
+            .unwrap_or_else(|| expression(target, input, variables, lists, arguments, active)),
         Some(InputValue::BlockReference(id)) => {
             let Some(block) = target.blocks.get(id) else {
-                return expression(target, input, variables, arguments, active);
+                return expression(target, input, variables, lists, arguments, active);
             };
             if matches!(
                 block.opcode.as_str(),
@@ -252,9 +320,9 @@ fn random_argument(
                     }
                 }
             }
-            expression(target, input, variables, arguments, active)
+            expression(target, input, variables, lists, arguments, active)
         }
-        _ => expression(target, input, variables, arguments, active),
+        _ => expression(target, input, variables, lists, arguments, active),
     }
 }
 
@@ -268,7 +336,8 @@ pub(super) fn boolean_input(
     target: &ScratchTarget,
     block: &ScratchBlock,
     name: &str,
-    variables: &HashMap<String, String>,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
     arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
@@ -285,14 +354,29 @@ pub(super) fn boolean_input(
                         | "operator_or"
                         | "operator_not"
                         | "operator_contains"
+                        | "data_listcontainsitem"
                 )
             }) =>
         {
-            expression(target, block.inputs.get(name), variables, arguments, active)
+            expression(
+                target,
+                block.inputs.get(name),
+                variables,
+                lists,
+                arguments,
+                active,
+            )
         }
         Some(_) => format!(
             "scratch_bool({})",
-            expression(target, block.inputs.get(name), variables, arguments, active)
+            expression(
+                target,
+                block.inputs.get(name),
+                variables,
+                lists,
+                arguments,
+                active
+            )
         ),
     }
 }

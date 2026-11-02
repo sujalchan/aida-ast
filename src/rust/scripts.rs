@@ -12,100 +12,140 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! finds supported Scratch event scripts and sends their bodies to statement lowering.
-//!
-//! sorting hat block IDs keeps script output stable when the project is generated
-//! more than once.
+//! emits resumable custom block and green flag script frames.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::parser::{InputValue, ScratchTarget, parse_input};
+use crate::parser::{InputValue, ScratchProject, ScratchTarget, parse_input};
 
-use super::{literals::line, project::rust_identifier, statements::generate_statements};
+use super::{
+    literals::line,
+    project::{ListInfo, VariableInfo, rust_identifier},
+    statements::generate_resumable_script,
+};
 
 #[derive(Clone)]
 pub(super) struct ProcedureSignature {
+    pub(super) frame_id: usize,
     pub(super) definition_id: String,
-    pub(super) function_name: String,
     pub(super) proccode: String,
     pub(super) argument_ids: Vec<String>,
     pub(super) argument_names: Vec<String>,
-    pub(super) arguments: HashMap<String, String>,
-    pub(super) state_variables: Vec<(String, String)>,
+    pub(super) warp: bool,
 }
 
-// emit Scratch custom block definitions as Rust functions.
-pub(super) fn generate_procedures(
-    target: &ScratchTarget,
-    variables: &HashMap<String, String>,
+// emit a script enum and one step function for every green flag hat.
+pub(super) fn generate_green_flag_functions(
+    project: &ScratchProject,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
     output: &mut String,
 ) {
-    let procedures = procedure_signatures(target, variables);
-    for procedure in &procedures {
-        let Some(definition) = target.blocks.get(&procedure.definition_id) else {
-            continue;
-        };
-        let mut parameters: Vec<_> = procedure
-            .argument_names
-            .iter()
-            .map(|name| {
-                let rust_name = procedure
-                    .arguments
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| rust_identifier(name));
-                format!("{rust_name}: ScratchValue")
-            })
-            .collect();
-        parameters.extend(
-            procedure
-                .state_variables
-                .iter()
-                .map(|(_, name)| format!("state_{name}: &mut ScratchValue")),
-        );
+    let scripts = green_flag_scripts(project);
+    if scripts.is_empty() {
+        output.push_str("enum GeneratedScript {}\n\nimpl ResumableScript for GeneratedScript {\n    fn step(&mut self, _state: &mut ScratchState, _clock: &dyn Clock) -> ScriptStatus { match *self {} }\n}\n\n");
+        return;
+    }
 
-        output.push_str("#[allow(dead_code, unused_variables, unused_mut, unused_assignments)]\n");
+    output.push_str("#[allow(dead_code)]\nstruct ProcedureFrame { function: usize, pc: usize, repeat_counts: Vec<usize>, wait_deadlines: Vec<Option<u64>>, arguments: Vec<ScratchValue>, warp_mode: bool }\n");
+    output.push_str(
+        "struct ScriptState { frames: Vec<ProcedureFrame>, warp_budget: WarpBudget }\n\n",
+    );
+    output.push_str("impl ScriptState {\n    fn warp_budget_expired(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return false; }\n        self.warp_budget.expired(clock)\n    }\n    fn yield_at_safe_point(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return true; }\n        self.warp_budget.expired(clock)\n    }\n}\n\n");
+    line(output, 0, "enum GeneratedScript {");
+    for script in &scripts {
+        line(output, 1, &format!("{}(ScriptState),", script.variant));
+    }
+    line(output, 0, "}\n");
+
+    output.push_str("impl ResumableScript for GeneratedScript {\n    fn step(&mut self, state: &mut ScratchState, clock: &dyn Clock) -> ScriptStatus {\n        match self {\n");
+    for script in &scripts {
+        line(
+            output,
+            3,
+            &format!(
+                "Self::{}(script) => step_{}(script, state, clock),",
+                script.variant, script.function
+            ),
+        );
+    }
+    output.push_str("        }\n    }\n}\n\n");
+
+    for script in &scripts {
+        let procedures = procedure_signatures(script.target);
+        let (start_pc, loop_count, wait_count) = generate_resumable_script(
+            script.target,
+            script.hat.next.as_deref(),
+            variables,
+            lists,
+            &procedures,
+            &script.function,
+            output,
+        );
         line(
             output,
             0,
             &format!(
-                "fn {}({}) {{",
-                procedure.function_name,
-                parameters.join(", ")
+                "fn new_{}() -> GeneratedScript {{ GeneratedScript::{}(ScriptState {{ frames: vec![ProcedureFrame {{ function: 0, pc: {}, repeat_counts: vec![0; {loop_count}], wait_deadlines: vec![None; {wait_count}], arguments: vec![], warp_mode: false }}], warp_budget: WarpBudget::new(500) }}) }}\n",
+                script.function,
+                script.variant,
+                if start_pc == usize::MAX {
+                    "usize::MAX".to_owned()
+                } else {
+                    start_pc.to_string()
+                }
             ),
         );
-        for (_, name) in &procedure.state_variables {
-            line(
-                output,
-                1,
-                &format!("let mut {name} = state_{name}.clone();"),
-            );
-        }
-
-        generate_statements(
-            target,
-            definition.next.as_deref(),
-            variables,
-            &procedure.arguments,
-            &procedures,
-            output,
-            1,
-        );
-
-        for (_, name) in &procedure.state_variables {
-            line(output, 1, &format!("*state_{name} = {name};"));
-        }
-        line(output, 0, "}");
-        output.push('\n');
     }
 }
 
-pub(super) fn procedure_signatures(
-    target: &ScratchTarget,
-    variables: &HashMap<String, String>,
-) -> Vec<ProcedureSignature> {
+// collect green flag hats across targets in stable target and block order.
+pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
+    let scripts = green_flag_scripts(project);
+    let values = scripts
+        .iter()
+        .map(|script| format!("new_{}()", script.function))
+        .collect::<Vec<_>>();
+    line(
+        output,
+        0,
+        &format!(
+            "fn new_scripts() -> Vec<GeneratedScript> {{ vec![{}] }}\n",
+            values.join(", ")
+        ),
+    );
+}
+
+struct GreenFlagScript<'a> {
+    target: &'a ScratchTarget,
+    hat: &'a crate::parser::ScratchBlock,
+    variant: String,
+    function: String,
+}
+
+fn green_flag_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
+    let mut scripts = Vec::new();
+    for target in &project.targets {
+        let target_name = rust_identifier(&target.name).to_ascii_lowercase();
+        for (_, hat) in event_hats(target)
+            .into_iter()
+            .filter(|(_, hat)| hat.opcode == "event_whenflagclicked")
+        {
+            let function = format!("green_flag_script_{target_name}_{}", scripts.len() + 1);
+            scripts.push(GreenFlagScript {
+                target,
+                hat,
+                variant: format!("Script{}", scripts.len() + 1),
+                function,
+            });
+        }
+    }
+    scripts
+}
+
+pub(super) fn procedure_signatures(target: &ScratchTarget) -> Vec<ProcedureSignature> {
     let mut definitions: Vec<_> = target
         .blocks
         .iter()
@@ -113,7 +153,6 @@ pub(super) fn procedure_signatures(
         .collect();
     definitions.sort_by(|(left_id, _), (right_id, _)| left_id.cmp(right_id));
 
-    let mut used_names = HashSet::from(["run".to_owned()]);
     let mut procedures = Vec::new();
     for (definition_id, definition) in definitions {
         let Some(InputValue::BlockReference(prototype_id)) =
@@ -131,35 +170,22 @@ pub(super) fn procedure_signatures(
             continue;
         };
 
-        let base_name = rust_identifier(
-            &proccode
-                .replace("%s", " ")
-                .replace("%b", " ")
-                .replace("%n", " "),
-        );
-        let mut function_name = base_name.clone();
-        let mut suffix = 2;
-        while !used_names.insert(function_name.clone()) {
-            function_name = format!("{base_name}_{suffix}");
-            suffix += 1;
-        }
-
         let argument_names = parse_string_array(mutation.get("argumentnames"));
         let argument_ids = parse_string_array(mutation.get("argumentids"));
-        let state_variables = procedure_variables(target, definition.next.as_deref(), variables);
-        let reserved_names = state_variables
-            .iter()
-            .flat_map(|(_, name)| [name.clone(), format!("state_{name}")])
-            .collect::<HashSet<_>>();
-        let arguments = allocate_argument_names(&argument_names, &reserved_names);
         procedures.push(ProcedureSignature {
+            frame_id: procedures.len() + 1,
             definition_id: definition_id.to_owned(),
-            function_name,
             proccode: proccode.to_owned(),
             argument_ids,
             argument_names,
-            arguments,
-            state_variables,
+            warp: mutation
+                .get("warp")
+                .and_then(|value| {
+                    value
+                        .as_bool()
+                        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+                })
+                .unwrap_or(false),
         });
     }
     procedures
@@ -172,81 +198,7 @@ fn parse_string_array(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn allocate_argument_names(
-    names: &[String],
-    reserved: &HashSet<String>,
-) -> HashMap<String, String> {
-    let mut used = reserved.clone();
-    let mut output = HashMap::new();
-    for name in names {
-        let base = rust_identifier(name);
-        let mut candidate = base.clone();
-        let mut suffix = 2;
-        while !used.insert(candidate.clone()) {
-            candidate = format!("{base}_{suffix}");
-            suffix += 1;
-        }
-        output.insert(name.clone(), candidate);
-    }
-    output
-}
-
-fn procedure_variables(
-    target: &ScratchTarget,
-    first: Option<&str>,
-    variables: &HashMap<String, String>,
-) -> Vec<(String, String)> {
-    let mut pending = first.into_iter().map(str::to_owned).collect::<Vec<_>>();
-    let mut visited = HashSet::new();
-    let mut found = HashSet::new();
-    while let Some(id) = pending.pop() {
-        if !visited.insert(id.clone()) {
-            continue;
-        }
-        let Some(block) = target.blocks.get(&id) else {
-            continue;
-        };
-
-        if let Some(data) = block.fields.get("VARIABLE").and_then(Value::as_array) {
-            if let Some(variable_id) = data.get(1).and_then(Value::as_str) {
-                if variables.contains_key(variable_id) {
-                    found.insert(variable_id.to_owned());
-                }
-            }
-        }
-        if let Some(next) = &block.next {
-            pending.push(next.clone());
-        }
-        for input in block.inputs.values() {
-            match parse_input(input) {
-                Some(InputValue::VariableReference(reference)) => {
-                    if variables.contains_key(reference.id) {
-                        found.insert(reference.id.to_owned());
-                    }
-                }
-                Some(InputValue::BlockReference(id)) => pending.push(id.to_owned()),
-                _ => {}
-            }
-        }
-    }
-
-    let mut output: Vec<_> = found
-        .into_iter()
-        .filter_map(|id| variables.get(&id).map(|name| (id, name.clone())))
-        .collect();
-    output.sort_by(|(left_id, left_name), (right_id, right_name)| {
-        left_name.cmp(right_name).then(left_id.cmp(right_id))
-    });
-    output
-}
-
-// lower each supported top-level event hat in stable block-ID order.
-pub(super) fn generate_scripts(
-    target: &ScratchTarget,
-    variables: &HashMap<String, String>,
-    output: &mut String,
-) {
-    let procedures = procedure_signatures(target, variables);
+fn event_hats(target: &ScratchTarget) -> Vec<(&str, &crate::parser::ScratchBlock)> {
     let mut hats: Vec<_> = target
         .blocks
         .iter()
@@ -261,17 +213,8 @@ pub(super) fn generate_scripts(
                         | "event_whenbroadcastreceived"
                 )
         })
+        .map(|(id, block)| (id.as_str(), block))
         .collect();
     hats.sort_by(|(left_id, _), (right_id, _)| left_id.cmp(right_id));
-    for (_, hat) in hats {
-        generate_statements(
-            target,
-            hat.next.as_deref(),
-            variables,
-            &HashMap::new(),
-            &procedures,
-            output,
-            1,
-        );
-    }
+    hats
 }

@@ -17,79 +17,180 @@
 //! allocates stable Rust identifiers for project variables, writes saved
 //! variable values, then delegates each target's scripts to the script module.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::parser::ScratchProject;
 
 use super::{
-    literals::{line, literal},
-    scripts::{generate_procedures, generate_scripts},
+    literals::{line, literal, quote},
+    scripts::{generate_green_flag_functions, generate_scripts},
 };
+
+#[derive(Clone)]
+pub(super) struct VariableInfo {
+    pub(super) slot: usize,
+    pub(super) name: String,
+    pub(super) target: String,
+    pub(super) is_stage: bool,
+}
+
+#[derive(Clone)]
+pub(super) struct ListInfo {
+    pub(super) slot: usize,
+    pub(super) name: String,
+    pub(super) target: String,
+    pub(super) is_stage: bool,
+}
 
 /// generate the module header, saved variable declarations, and target scripts.
 pub fn generate(project: &ScratchProject) -> String {
     let variables = allocate_variables(project);
+    let lists = allocate_lists(project);
     let mut output = String::from(
-        "#[allow(unused_imports)]\nuse crate::runtime::{\n    scratch_acos_degrees, scratch_add, scratch_and, scratch_asin_degrees, scratch_atan_degrees,\n    scratch_bool, scratch_contains, scratch_cos, scratch_divide, scratch_equals,\n    scratch_greater_than, scratch_join, scratch_length, scratch_less_than, scratch_letter,\n    scratch_mod, scratch_multiply, scratch_not, scratch_or, scratch_random, scratch_round,\n    scratch_sin, scratch_subtract, scratch_tan, scratch_to_number, ScratchValue,\n};\n\n#[allow(unused_macros)]\nmacro_rules! print_value {\n    ($name:expr, $value:expr) => {\n        println!(\"{}: {:?}\", $name, $value);\n    };\n}\n\n",
+        "#[allow(unused_imports)]\nuse crate::runtime::{\n    scratch_acos_degrees, scratch_add, scratch_and, scratch_asin_degrees, scratch_atan_degrees,\n    scratch_bool, scratch_contains, scratch_cos, scratch_divide, scratch_equals,\n    scratch_greater_than, scratch_join, scratch_length, scratch_less_than, scratch_letter,\n    scratch_mod, scratch_multiply, scratch_not, scratch_or, scratch_random, scratch_round,\n    scratch_sin, scratch_subtract, scratch_tan, scratch_to_number, Clock, ResumableScript,\n    ScratchList, ScratchListMetadata, ScratchState, ScratchValue, ScratchVariableMetadata, ScriptScheduler, ScriptStatus, WarpBudget,\n};\n\n#[allow(unused_macros)]\nmacro_rules! print_value {\n    ($name:expr, $value:expr) => {\n        println!(\"{}: {:?}\", $name, $value);\n    };\n}\n\n",
+    );
+    output = output.replace(
+        "ScratchVariableMetadata, ScriptScheduler, ScriptStatus",
+        "ScratchVariableMetadata, SchedulerStatus, ScriptScheduler, ScriptStatus",
     );
 
-    for target in &project.targets {
-        generate_procedures(target, &variables, &mut output);
+    generate_green_flag_functions(project, &variables, &lists, &mut output);
+    generate_scripts(project, &mut output);
+
+    output.push_str("#[allow(dead_code)]\npub struct GeneratedProgram { state: ScratchState, scheduler: ScriptScheduler<GeneratedScript> }\n\n#[allow(dead_code)]\nimpl GeneratedProgram {\n    pub fn new() -> Self { Self::build(None) }\n    pub fn new_with_clock(clock: Box<dyn Clock>) -> Self { Self::build(Some(clock)) }\n    fn build(clock: Option<Box<dyn Clock>>) -> Self {\n");
+
+    let mut initial_values = vec![String::new(); variables.len()];
+    let mut variable_metadata = vec![String::new(); variables.len()];
+    for (id, info) in &variables {
+        let variable = project
+            .targets
+            .iter()
+            .find(|target| target.name == info.target && target.is_stage == info.is_stage)
+            .and_then(|target| target.variables.get(id))
+            .or_else(|| {
+                project
+                    .targets
+                    .iter()
+                    .find_map(|target| target.variables.get(id))
+            })
+            .expect("every allocated variable has an initializer");
+        initial_values[info.slot] = format!("({}).into()", literal(&variable.value));
+        variable_metadata[info.slot] = format!(
+            "ScratchVariableMetadata::new({}, {}, {}, {})",
+            quote(id),
+            quote(&info.name),
+            quote(&info.target),
+            info.is_stage
+        );
     }
-
-    output.push_str("#[allow(unused_mut, unused_variables, unused_assignments)]\npub fn run() {\n");
-
-    for target in &project.targets {
-        let mut declarations: Vec<_> = target.variables.iter().collect();
-        declarations.sort_by(|(left_id, left), (right_id, right)| {
-            left.name.cmp(&right.name).then(left_id.cmp(right_id))
-        });
-        for (id, variable) in declarations {
-            if let Some(name) = variables.get(id) {
-                line(
-                    &mut output,
-                    1,
-                    &format!(
-                        "let mut {name}: ScratchValue = ({}).into();",
-                        literal(&variable.value)
-                    ),
-                );
-            }
-        }
+    let mut initial_lists = vec![String::new(); lists.len()];
+    let mut list_metadata = vec![String::new(); lists.len()];
+    for (id, info) in &lists {
+        let list = project
+            .targets
+            .iter()
+            .find(|target| target.name == info.target && target.is_stage == info.is_stage)
+            .and_then(|target| target.lists.get(id))
+            .or_else(|| {
+                project
+                    .targets
+                    .iter()
+                    .find_map(|target| target.lists.get(id))
+            })
+            .expect("every allocated list has saved contents");
+        initial_lists[info.slot] = format!(
+            "ScratchList::new(vec![{}])",
+            list.items
+                .iter()
+                .map(|item| format!("({}).into()", literal(item)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        list_metadata[info.slot] = format!(
+            "ScratchListMetadata::new({}, {}, {}, {})",
+            quote(id),
+            quote(&info.name),
+            quote(&info.target),
+            info.is_stage
+        );
     }
+    line(
+        &mut output,
+        1,
+        &format!(
+            "let state = ScratchState::with_project_data(vec![{}], vec![{}], vec![{}], vec![{}], vec![false; {}]);",
+            initial_values.join(", "),
+            variable_metadata.join(", "),
+            initial_lists.join(", "),
+            list_metadata.join(", "),
+            lists.len()
+        ),
+    );
 
-    for target in &project.targets {
-        generate_scripts(target, &variables, &mut output);
-    }
-
-    output.push_str("}\n");
+    output.push_str("let scripts = new_scripts();\nlet scheduler = match clock { Some(clock) => ScriptScheduler::with_clock(scripts, clock), None => ScriptScheduler::new(scripts) };\n");
+    output.push_str("    Self { state, scheduler }\n    }\n\n");
+    output
+        .push_str("    pub fn step(&mut self) -> bool { self.scheduler.step(&mut self.state) }\n");
+    output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { self.scheduler.advance(&mut self.state) }\n");
+    output.push_str("    pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }\n");
+    output.push_str("    pub fn restart(&mut self) { self.scheduler.restart(new_scripts()); }\n");
+    output.push_str(
+        "    pub fn is_complete(&self) -> bool { self.scheduler.active_scripts() == 0 }\n",
+    );
+    output.push_str("    pub fn state(&self) -> &ScratchState { &self.state }\n");
+    output.push_str("    pub fn run_until_complete(&mut self) { self.scheduler.run_until_complete(&mut self.state); }\n}\n\n");
+    output.push_str("pub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
     output
 }
 
-// assign each Scratch variable ID a unique, stable Rust identifier.
-fn allocate_variables(project: &ScratchProject) -> HashMap<String, String> {
-    let mut entries: Vec<_> = project
-        .targets
-        .iter()
-        .flat_map(|target| {
-            target
-                .variables
-                .iter()
-                .map(|(id, variable)| (id.as_str(), variable.name.as_str()))
-        })
-        .collect();
-    entries.sort_unstable();
-    let mut used = HashSet::new();
-    let mut output = HashMap::new();
-    for (id, name) in entries {
-        let base = rust_identifier(name);
-        let mut candidate = base.clone();
-        let mut suffix = 2;
-        while !used.insert(candidate.clone()) {
-            candidate = format!("{base}_{suffix}");
-            suffix += 1;
+// assign each Scratch variable ID a stable shared-state slot.
+fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo> {
+    let mut entries = BTreeMap::new();
+    for target in &project.targets {
+        for (id, variable) in &target.variables {
+            let info = entries.entry(id.clone()).or_insert_with(|| VariableInfo {
+                slot: 0,
+                name: variable.name.clone(),
+                target: target.name.clone(),
+                is_stage: target.is_stage,
+            });
+            if target.is_stage {
+                info.name = variable.name.clone();
+                info.target = target.name.clone();
+                info.is_stage = true;
+            }
         }
-        output.insert(id.to_owned(), candidate);
+    }
+    let mut output = HashMap::new();
+    for (slot, (id, mut info)) in entries.into_iter().enumerate() {
+        info.slot = slot;
+        output.insert(id, info);
+    }
+    output
+}
+
+// assign each scratch list id a stable shared-state slot.
+fn allocate_lists(project: &ScratchProject) -> HashMap<String, ListInfo> {
+    let mut entries = BTreeMap::new();
+    for target in &project.targets {
+        for (id, list) in &target.lists {
+            let info = entries.entry(id.clone()).or_insert_with(|| ListInfo {
+                slot: 0,
+                name: list.name.clone(),
+                target: target.name.clone(),
+                is_stage: target.is_stage,
+            });
+            if target.is_stage {
+                info.name = list.name.clone();
+                info.target = target.name.clone();
+                info.is_stage = true;
+            }
+        }
+    }
+    let mut output = HashMap::new();
+    for (slot, (id, mut info)) in entries.into_iter().enumerate() {
+        info.slot = slot;
+        output.insert(id, info);
     }
     output
 }

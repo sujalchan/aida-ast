@@ -88,7 +88,7 @@ mod tests {
         .unwrap();
 
         let output = generate(&project);
-        assert!(output.contains("scratch_to_number(&amount).floor()"));
+        assert!(output.contains("scratch_to_number(state.get(0)).floor()"));
         assert!(output.contains("scratch_equals(\"5\", 5.0_f64)"));
     }
 
@@ -166,17 +166,18 @@ mod tests {
         .unwrap();
 
         let output = generate(&project);
-        assert!(output.contains("scratch_round(&text)"));
-        assert!(output.contains("while scratch_equals(&count, 5.0_f64)"));
-        assert!(output.contains("flag = count.clone();"));
+        assert!(output.contains("scratch_round(state.get(2))"));
+        assert!(output.contains("scratch_equals(state.get(0), 5.0_f64)"));
+        assert!(output.contains("let scratch_new_value: ScratchValue = (state.get(0)).clone();"));
         assert!(!output.contains("scratch_bool(scratch_equals"));
-        assert!(!output.contains("scratch_equals(count.clone()"));
-        assert!(!output.contains("scratch_round(text.clone()"));
-        assert_eq!(output.matches("scratch_round(&text)").count(), 1);
+        assert!(!output.contains("scratch_equals((state.get(0)).clone()"));
+        assert!(!output.contains("scratch_round((state.get(2)).clone()"));
+        assert_eq!(output.matches("scratch_round(state.get(2))").count(), 1);
+        assert!(output.contains("return ScriptStatus::Yield;"));
     }
 
     #[test]
-    fn emits_custom_blocks_as_functions_with_arguments_and_state() {
+    fn emits_custom_blocks_as_resumable_argument_frames() {
         let project = parse_project(
             &json!({
                 "targets": [{
@@ -249,11 +250,273 @@ mod tests {
         .unwrap();
 
         let output = generate(&project);
-        assert!(output.contains("fn echo(value: ScratchValue, state_result: &mut ScratchValue) {"));
-        assert!(output.contains("let mut result = state_result.clone();"));
-        assert!(output.contains("result = value.clone();"));
-        assert!(output.contains("*state_result = result;"));
-        assert!(output.contains("echo((\"hello\").into(), &mut result);"));
-        assert!(output.find("fn echo").unwrap() < output.find("pub fn run").unwrap());
+        assert!(output.contains("arguments[0]).clone()"));
+        assert!(output.contains("arguments: vec![(\"hello\").to_owned().into()]"));
+        assert!(output.contains("script.frames.push(ProcedureFrame"));
+        assert!(output.contains("function: 1"));
+    }
+
+    #[test]
+    fn nested_custom_calls_preserve_warp_mode_and_the_callers_pc() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1",
+                    "isStage": false,
+                    "variables": {"done_id": ["done", false], "progress_id": ["progress", 0]},
+                    "blocks": {
+                        "hat": {"opcode": "event_whenflagclicked", "next": "call_outer", "topLevel": true, "inputs": {}, "fields": {}},
+                        "call_outer": {"opcode": "procedures_call", "next": "after_call", "parent": "hat", "inputs": {}, "fields": {}, "mutation": {"proccode": "warp outer", "argumentids": "[]", "warp": "false"}},
+                        "after_call": {"opcode": "looks_say", "parent": "call_outer", "inputs": {"MESSAGE": [1, [10, "returned"]]}, "fields": {}},
+                        "inner_definition": {"opcode": "procedures_definition", "next": "inner_change", "topLevel": true, "inputs": {"custom_block": [1, "inner_prototype"]}, "fields": {}},
+                        "inner_prototype": {"opcode": "procedures_prototype", "parent": "inner_definition", "inputs": {}, "fields": {}, "mutation": {"proccode": "normal inner", "argumentnames": "[]", "argumentids": "[]", "argumentdefaults": "[]", "warp": "false"}},
+                        "inner_change": {"opcode": "data_changevariableby", "parent": "inner_definition", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["progress", "progress_id"]}},
+                        "outer_definition": {"opcode": "procedures_definition", "next": "outer_repeat", "topLevel": true, "inputs": {"custom_block": [1, "outer_prototype"]}, "fields": {}},
+                        "outer_prototype": {"opcode": "procedures_prototype", "parent": "outer_definition", "inputs": {}, "fields": {}, "mutation": {"proccode": "warp outer", "argumentnames": "[]", "argumentids": "[]", "argumentdefaults": "[]", "warp": "true"}},
+                        "outer_repeat": {"opcode": "control_repeat", "next": "wait_until", "parent": "outer_definition", "inputs": {"TIMES": [1, [4, "2"]], "SUBSTACK": [2, "call_inner"]}, "fields": {}},
+                        "call_inner": {"opcode": "procedures_call", "next": "outer_change", "parent": "outer_repeat", "inputs": {}, "fields": {}, "mutation": {"proccode": "normal inner", "argumentids": "[]", "warp": "false"}},
+                        "outer_change": {"opcode": "data_changevariableby", "parent": "call_inner", "inputs": {"VALUE": [1, [4, "10"]]}, "fields": {"VARIABLE": ["progress", "progress_id"]}},
+                        "wait_until": {"opcode": "control_wait_until", "parent": "outer_repeat", "inputs": {"CONDITION": [2, "done_reporter"]}, "fields": {}},
+                        "done_reporter": {"opcode": "data_variable", "parent": "wait_until", "inputs": {}, "fields": {"VARIABLE": ["done", "done_id"]}}
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let output = generate(&project);
+        assert!(output.contains("warp_mode: inherited_warp || true"));
+        assert!(output.contains("warp_mode: inherited_warp || false"));
+        assert!(output.contains("if !(scratch_bool(state.get(0)))"));
+        assert!(output.contains("script.frames.last_mut().unwrap().pc = 1;"));
+        assert!(
+            output.contains("if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }")
+        );
+        assert!(output.contains("_ => { script.frames.pop(); continue; }"));
+        assert!(output.contains("print_value!(\"say\", \"returned\");"));
+    }
+
+    #[test]
+    fn emits_and_invokes_each_green_flag_script_separately() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1",
+                    "isStage": false,
+                    "variables": {"count_id": ["count", 0]},
+                    "blocks": {
+                        "first_hat": {
+                            "opcode": "event_whenflagclicked",
+                            "next": "first_repeat",
+                            "topLevel": true,
+                            "inputs": {},
+                            "fields": {}
+                        },
+                        "first_repeat": {
+                            "opcode": "control_repeat",
+                            "next": null,
+                            "parent": "first_hat",
+                            "inputs": {"TIMES": [1, [4, "1"]], "SUBSTACK": [2, "first_set"]},
+                            "fields": {}
+                        },
+                        "first_set": {
+                            "opcode": "data_setvariableto",
+                            "parent": "first_repeat",
+                            "inputs": {"VALUE": [1, [4, "1"]]},
+                            "fields": {"VARIABLE": ["count", "count_id"]}
+                        },
+                        "second_hat": {
+                            "opcode": "event_whenflagclicked",
+                            "next": "second_repeat",
+                            "topLevel": true,
+                            "inputs": {},
+                            "fields": {}
+                        },
+                        "second_repeat": {
+                            "opcode": "control_repeat",
+                            "next": null,
+                            "parent": "second_hat",
+                            "inputs": {"TIMES": [1, [4, "1"]], "SUBSTACK": [2, "second_set"]},
+                            "fields": {}
+                        },
+                        "second_set": {
+                            "opcode": "data_setvariableto",
+                            "parent": "second_repeat",
+                            "inputs": {"VALUE": [1, [4, "2"]]},
+                            "fields": {"VARIABLE": ["count", "count_id"]}
+                        }
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let output = generate(&project);
+        assert!(output.contains("fn step_green_flag_script_sprite1_1"));
+        assert!(output.contains("fn step_green_flag_script_sprite1_2"));
+        assert!(output.contains("let scratch_new_value: ScratchValue = (1.0_f64).into();"));
+        assert!(output.contains("let scratch_new_value: ScratchValue = (2.0_f64).into();"));
+        assert!(output.contains("fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_1(), new_green_flag_script_sprite1_2()] }"));
+        assert!(output.contains("pub fn run_until_complete(&mut self)"));
+        assert!(output.contains("pub fn step(&mut self) -> bool"));
+        assert!(output.contains("pub fn restart(&mut self)"));
+        assert_eq!(output.matches("return ScriptStatus::Yield;").count(), 2);
+    }
+
+    #[test]
+    fn wait_block_keeps_its_deadline_in_the_active_procedure_frame() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1",
+                    "isStage": false,
+                    "variables": {},
+                    "blocks": {
+                        "hat": {"opcode": "event_whenflagclicked", "next": "wait", "topLevel": true, "inputs": {}, "fields": {}},
+                        "wait": {"opcode": "control_wait", "next": "say", "parent": "hat", "inputs": {"DURATION": [1, [4, "0.25"]]}, "fields": {}},
+                        "say": {"opcode": "looks_say", "next": null, "parent": "wait", "inputs": {"MESSAGE": [1, [10, "done"]]}, "fields": {}}
+                    }
+                }]
+            }).to_string(),
+        ).unwrap();
+
+        let output = generate(&project);
+        assert!(output.contains("wait_deadlines: vec![None; 1]"));
+        assert!(output.contains("ScriptStatus::WaitUntil(wait_deadline)"));
+        assert!(output.contains("clock.now_millis().saturating_add(duration_ms)"));
+        assert!(output.contains("wait_deadlines[0] = None"));
+        assert!(output.contains("pub fn advance(&mut self) -> SchedulerStatus"));
+    }
+
+    #[test]
+    fn lowers_nested_repeat_until_and_forever_with_resumable_loop_state() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1",
+                    "isStage": false,
+                    "variables": {
+                        "count_id": ["count", 2],
+                        "done_id": ["done", false]
+                    },
+                    "blocks": {
+                        "hat": {
+                            "opcode": "event_whenflagclicked",
+                            "next": "outer_repeat",
+                            "topLevel": true,
+                            "inputs": {},
+                            "fields": {}
+                        },
+                        "outer_repeat": {
+                            "opcode": "control_repeat",
+                            "next": null,
+                            "parent": "hat",
+                            "inputs": {"TIMES": [1, [4, "2"]], "SUBSTACK": [2, "inner_repeat"]},
+                            "fields": {}
+                        },
+                        "inner_repeat": {
+                            "opcode": "control_repeat",
+                            "next": null,
+                            "parent": "outer_repeat",
+                            "inputs": {"TIMES": [3, "count_reporter", [10, "0"]], "SUBSTACK": [2, "until"]},
+                            "fields": {}
+                        },
+                        "count_reporter": {
+                            "opcode": "data_variable",
+                            "parent": "inner_repeat",
+                            "inputs": {},
+                            "fields": {"VARIABLE": ["count", "count_id"]}
+                        },
+                        "until": {
+                            "opcode": "control_repeat_until",
+                            "next": null,
+                            "parent": "inner_repeat",
+                            "inputs": {"CONDITION": [2, "done_reporter"], "SUBSTACK": [2, "forever"]},
+                            "fields": {}
+                        },
+                        "done_reporter": {
+                            "opcode": "data_variable",
+                            "parent": "until",
+                            "inputs": {},
+                            "fields": {"VARIABLE": ["done", "done_id"]}
+                        },
+                        "forever": {
+                            "opcode": "control_forever",
+                            "next": null,
+                            "parent": "until",
+                            "inputs": {"SUBSTACK": [2, "set_done"]},
+                            "fields": {}
+                        },
+                        "set_done": {
+                            "opcode": "data_setvariableto",
+                            "next": null,
+                            "parent": "forever",
+                            "inputs": {"VALUE": [1, [4, "1"]]},
+                            "fields": {"VARIABLE": ["done", "done_id"]}
+                        }
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let output = generate(&project);
+        assert!(output.contains("repeat_counts: vec![0; 2]"));
+        assert!(
+            output.contains("script.frames.last_mut().unwrap().repeat_counts[0] = repeat_count;")
+        );
+        assert!(
+            output.contains("script.frames.last_mut().unwrap().repeat_counts[1] = repeat_count;")
+        );
+        assert_eq!(
+            output.matches("let repeat_count = scratch_round").count(),
+            2
+        );
+        assert!(output.contains("if !(scratch_bool(state.get(1)))"));
+        assert!(output.contains("script.frames.last_mut().unwrap().pc = 8;"));
+        assert!(output.contains("return ScriptStatus::Yield;"));
+    }
+
+    #[test]
+    fn shared_state_slots_keep_same_named_target_variables_distinct() {
+        let project = parse_project(
+            &json!({
+                "targets": [
+                    {
+                        "name": "Stage",
+                        "isStage": true,
+                        "variables": {"stage_score_id": ["score", 0]},
+                        "blocks": {
+                            "stage_hat": {"opcode": "event_whenflagclicked", "next": "stage_set", "topLevel": true, "inputs": {}, "fields": {}},
+                            "stage_set": {"opcode": "data_setvariableto", "next": null, "parent": "stage_hat", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["score", "stage_score_id"]}}
+                        }
+                    },
+                    {
+                        "name": "Sprite1",
+                        "isStage": false,
+                        "variables": {"sprite_score_id": ["score", 0]},
+                        "blocks": {
+                            "sprite_hat": {"opcode": "event_whenflagclicked", "next": "sprite_set", "topLevel": true, "inputs": {}, "fields": {}},
+                            "sprite_set": {"opcode": "data_setvariableto", "next": null, "parent": "sprite_hat", "inputs": {"VALUE": [1, [4, "2"]]}, "fields": {"VARIABLE": ["score", "sprite_score_id"]}}
+                        }
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let output = generate(&project);
+        assert!(output.contains(
+            "ScratchVariableMetadata::new(\"stage_score_id\", \"score\", \"Stage\", true)"
+        ));
+        assert!(output.contains(
+            "ScratchVariableMetadata::new(\"sprite_score_id\", \"score\", \"Sprite1\", false)"
+        ));
+        assert!(output.contains("state.set(0, scratch_new_value);"));
+        assert!(output.contains("state.set(1, scratch_new_value);"));
     }
 }

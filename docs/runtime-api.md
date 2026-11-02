@@ -18,10 +18,57 @@ Generated modules expose:
 pub fn run()
 ```
 
-`run` initializes local `ScratchValue` variables from the Scratch project,
-then executes supported event script bodies in generated order. The current
-implementation returns `()`; Scratch variables stay local to the function.
-It does not schedule events concurrently.
+`run` initializes shared `ScratchValue` state from the Scratch project, then
+starts each green-flag script in stable block-ID order. Generated script and
+procedure frames resume through the single-threaded runtime scheduler. Each
+script runs until it completes or reaches a cooperative yield; a forever loop
+therefore keeps `run()` active. `GeneratedProgram::step()` advances one
+scheduler slot and returns to the host, so an application can interleave its
+own work with script progress. `run()` is a convenience wrapper that continues
+until all scripts complete.
+
+Generated modules also expose `GeneratedProgram::new`, `new_with_clock`,
+`advance`, `duration_until`, `restart`, `is_complete`, `state`, and
+`run_until_complete` for
+applications that need to drive scheduler turns themselves. `advance()` runs
+at most one runnable script and returns `Progressed`, `WaitingUntil(deadline)`
+or `Complete`. A host can schedule a timer for the returned deadline and
+continue processing input and rendering without polling. `step()` remains a
+compatibility convenience and returns false when no script can run now; use
+`advance()` when waits must be distinguished from completion.
+
+The headless `aida-runtime` launcher paces scheduler turns at 30 FPS by default
+(about 33.333 ms per tick). Pass `--fps 60` to select another positive finite
+rate, or `--turbo` to remove intentional frame pacing. The launcher measures
+each tick with a monotonic clock and sleeps only for the remainder of its
+target duration. Slow ticks do not accumulate catch-up work. Turbo still
+honors Scratch waits and sleeps until the next script deadline when nothing is
+runnable. The scheduler's `GeneratedProgram::advance()` stays independent of
+this pacing policy for hosts that have their own event loop.
+
+Use the flags with `./run.sh [path/to/project.sb3] --fps 60` or
+`./run.sh [path/to/project.sb3] --turbo`. When launching the generated runtime
+directly, pass Cargo arguments after `--`, for example
+`cargo run -p aida-runtime -- --fps 60`.
+
+`restart()` has green-flag semantics: it discards all active script and wait
+frames, then starts a fresh instance of every green-flag script. Project
+variables keep their current values, as Scratch's green flag stops threads and
+starts the hats without resetting variable values. A future graphics layer
+will also need to apply Scratch's sprite reset behavior, which this runtime
+does not model.
+
+The wait and green-flag behavior was checked against Scratch VM
+[`v5.0.301-spork.1`](https://github.com/scratchfoundation/scratch-vm/tree/v5.0.301-spork.1)
+(`cf22eeb`): [`runtime.greenFlag()`](https://github.com/scratchfoundation/scratch-vm/blob/v5.0.301-spork.1/src/engine/runtime.js)
+stops active threads before starting green-flag hats, and
+[`control_wait`](https://github.com/scratchfoundation/scratch-vm/blob/v5.0.301-spork.1/src/blocks/scratch3_control.js)
+yields while its timer is pending. This runtime stores deadlines in integer
+milliseconds and rounds fractional milliseconds up. Its host wake timing and
+script ordering can differ from Scratch's frame-based sequencer.
+The runtime's fixed target rate and turbo switch are headless host policies;
+Scratch itself is driven by its rendering/frame loop, so exact wake and frame
+timing can differ.
 
 Initial values come from the variable values saved in the `.sb3`: strings stay
 `Text`, booleans stay `Boolean`, and numeric values are emitted as round-trip
@@ -46,7 +93,8 @@ functions below. This is the interface generated modules use:
 ```rust
 pub use operators::*;
 pub use random::{ScratchRandom, scratch_random};
-pub use value::{ScratchInput, ScratchValue, ScratchValueView};
+pub use scheduler::{Clock, ResumableScript, SchedulerStatus, ScriptScheduler, ScriptStatus, WarpBudget};
+pub use value::{ScratchInput, ScratchState, ScratchValue, ScratchValueView};
 ```
 
 ## Values
@@ -122,15 +170,20 @@ mirror these rules.
 
 The generator currently lowers:
 
-- Event hats: green flag, sprite clicked, stage clicked, key pressed, and
-  broadcast received. Their statement chains are emitted sequentially.
+- Green-flag hats: each becomes an independent resumable script sharing one
+  live project state.
 - Variable statements: `data_setvariableto` and `data_changevariableby`.
-- Custom procedure definitions and calls. Definitions become Rust functions;
-  calls pass dynamic Scratch arguments and mutable references to the variables
-  used by the procedure body.
-- Loop statements: `control_repeat`, `control_repeat_until`, and
-  `control_while`. Their substacks are lowered recursively; repeat counts use
-  Scratch rounding, and boolean conditions are converted using Scratch truth rules.
+- Custom procedure definitions and calls. Calls push frames that retain the
+  return location, dynamic arguments, loop counters, and inherited warp mode.
+  Shared variables remain in the project's live state across yields.
+- Loop statements: `control_repeat`, `control_repeat_until`, `control_while`,
+  and `control_forever`. Their substacks are resumable; repeat counts use
+  Scratch rounding, and boolean conditions use Scratch truth rules.
+- `control_wait`: evaluates its duration once, stores an absolute wake deadline
+  in the current script frame, and suspends only that script. A zero-duration
+  wait still yields once. Waiting scripts do not occupy scheduler turns.
+- `control_wait_until`: reevaluates its condition on resume. In warp mode its
+  yield is suppressed until the warp time safeguard is reached.
 - `looks_say` statements: emitted as `print_value!(name, expression)` at the same
   point in the script. For variable reporters, the macro prints the Scratch
   variable name and its value using Rust `Debug` formatting.
@@ -141,6 +194,27 @@ The generator currently lowers:
 - Numeric reporters: random, round, and the math operator reporter (`abs`, `floor`,
   `ceiling`, `sqrt`, trig functions, logarithms, and exponentiation).
 - Variable reporters and numeric/text literal reporters.
+- Standard list reporters and statements: add, delete, delete all, insert,
+  replace, get, item number, length, contains, contents, show, and hide. List
+  identity is resolved from the Scratch list ID, so equal names in separate
+  targets remain separate lists. Mutations use the same shared state as
+  scheduled scripts.
+
+`ScratchList` stores typed `ScratchValue`s in a `Vec`, uses Scratch's one-based
+indices and `last`/`random`/`any`/`all` index forms where applicable, and caps
+lists at 200,000 items. Appending to a full list is ignored. Inserting at a
+valid position in a full list inserts the new value and drops the old tail;
+appending beyond the limit is ignored. Invalid reads return empty text, while
+invalid mutation indices have no effect. List monitor visibility is runtime
+state separate from list contents. Saved monitor visibility is not loaded and
+there is no graphics/monitor UI yet. Sprite clone-local list copies are not
+implemented because clone support is not present.
+
+List conversion and limit behavior were checked against Scratch VM
+`v5.0.301-spork.1` (`cf22eeb`), especially
+[`Cast.toListIndex`](https://github.com/scratchfoundation/scratch-vm/blob/v5.0.301-spork.1/src/util/cast.js)
+and the list opcodes in
+[`scratch3_data.js`](https://github.com/scratchfoundation/scratch-vm/blob/v5.0.301-spork.1/src/blocks/scratch3_data.js).
 
 Arithmetic and text/boolean reporters call the matching `scratch_*` helper.
 Known numeric literals go directly to the corresponding `f64` method, such as
@@ -162,12 +236,27 @@ available when a repeatable sequence is needed.
 An unsupported reporter or malformed input emits a typed `todo!()` expression;
 an unsupported statement emits `todo!()` as a statement. These compile, but
 panic if execution reaches them. Lists and control blocks other than the listed
-loops are not yet lowered by this Rust generator.
+loops and `control_wait_until` are not yet lowered by this Rust generator.
 
-Custom block definitions are emitted as Rust functions with `ScratchValue`
-arguments and mutable references for Scratch variables used by their bodies.
-Procedure call blocks invoke those functions. The functions are only emitted
-when the Scratch project defines them.
+Normal and warp custom block calls use resumable procedure frames with owned
+`ScratchValue` arguments. Normal loop boundaries yield while preserving the
+caller and callee frames. Warp procedures suppress ordinary loop and
+`control_wait_until` yields until a safe point observes that 500 ms have elapsed,
+matching the Scratch VM warp budget. The runtime uses an injectable monotonic
+clock so this limit can be tested without sleeping.
+
+The Scratch VM's `control_wait` starts a timer and yields while that timer is
+pending. The generated frame stores the evaluated deadline and the scheduler
+reports the earliest deadline when all scripts are waiting. Inside warp mode,
+the VM suppresses ordinary yields until its time budget expires; this
+implementation follows that behavior by polling the wait at safe points until
+the warp safeguard yields. Broadcast and broadcast-and-wait are deferred.
+
+The blocking `run()` wrapper sleeps until the next deadline when every active
+script is waiting. Event-loop hosts should use `advance()` and schedule the
+returned deadline themselves. Infinite scripts intentionally keep the blocking
+wrapper active; `is_complete()` reports when all finite scripts have been
+removed from scheduling.
 
 The separate AIDA text generator remains available for `.aida` output. Its
 block coverage does not imply equivalent Rust lowering.
