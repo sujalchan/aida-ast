@@ -3,6 +3,10 @@
 `cargo run` reads `example.sb3`, keeps the existing console debug output, and
 writes `project.aida`.
 
+`cargo run -- --tests` compiles every `.sb3` file directly inside `tests/src`
+and writes a matching `.rs` file into `tests/output`. The output directory is
+created automatically. The scan includes files directly inside `tests/src`.
+
 For VS Code syntax highlighting, see the [AIDA extension](../editors/vscode/README.md).
 
 ## Names and values
@@ -24,10 +28,14 @@ Cloud declarations use `cloud var:`. Stage and sprite display names remain quote
 
 String **values** keep their quotes and their original content, including spaces.
 Numeric primitive tags produce numbers, even when the JSON stores them as strings.
+Numeric-looking text values such as `0.0` and `5` also produce unquoted numbers.
 Blank numeric sockets become zero. Special list indexes such as `last`, `all` and
 `random` remain selectors even when Scratch stores them in numeric shadow slots.
-Text primitive tags keep text, even when it looks numeric. Expressions are preserved;
+Other text values keep their quotes. Expressions are preserved;
 the generator does not evaluate `join`, arithmetic, or Scratch's runtime conversions.
+Scratch math dropdown blocks render as Rust floating-point methods, such as
+`(9 as f64).sqrt()` and `(30 as f64).to_radians().sin()`. Inverse trigonometric
+results convert back to degrees to match Scratch.
 
 ## Block coverage
 

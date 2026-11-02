@@ -2,6 +2,9 @@
 *.sb3
 *.json
 
+# Test projects are checked-in source fixtures for the --tests runtime mode.
+!/tests/src/*.sb3
+
 # Ignore extracted or intermediate target files
 extracted_project.json
 *.aida

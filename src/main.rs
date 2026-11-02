@@ -12,13 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{error::Error, fs};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 
 mod aida;
 mod extractor;
 mod parser;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        Some("--tests") if args.next().is_none() => return compile_tests(),
+        Some(argument) => {
+            return Err(format!("unknown argument: {argument}\nusage: aida-ast [--tests]").into());
+        }
+        None => {}
+    }
+
     let sb3_input = "example.sb3";
     let json_output = "project.json";
     let aida_output = "project.aida";
@@ -34,5 +47,37 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::write(aida_output, aida::generate(&project))?;
     println!("Generated {aida_output}");
 
+    Ok(())
+}
+
+fn compile_tests() -> Result<(), Box<dyn Error>> {
+    let source_dir = Path::new("tests/src");
+    let output_dir = Path::new("tests/output");
+    fs::create_dir_all(output_dir)?;
+
+    let mut inputs: Vec<PathBuf> = fs::read_dir(source_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<_, _>>()?;
+    inputs.retain(|path| {
+        path.is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("sb3"))
+    });
+    inputs.sort();
+
+    for input in &inputs {
+        let json = extractor::read_project_json(input)?;
+        let project = parser::parse_project(&json)?;
+        let output_name = input
+            .file_stem()
+            .ok_or("test project has no filename")?
+            .to_string_lossy();
+        let output = output_dir.join(format!("{output_name}.rs"));
+        fs::write(&output, aida::generate(&project))?;
+        println!("Compiled {} -> {}", input.display(), output.display());
+    }
+
+    println!("Compiled {} test project(s)", inputs.len());
     Ok(())
 }

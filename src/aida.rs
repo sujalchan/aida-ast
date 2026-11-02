@@ -373,6 +373,9 @@ impl<'a> TargetGenerator<'a> {
     }
 
     fn block_expression(&self, block: &ScratchBlock, active: &mut HashSet<String>) -> Expression {
+        if block.opcode == "operator_mathop" {
+            return self.math_expression(block, active);
+        }
         match rule(&block.opcode) {
             Some(Rule::Reporter(template)) => {
                 return Expression::atom(self.render_template(block, template, active));
@@ -436,6 +439,33 @@ impl<'a> TargetGenerator<'a> {
             },
             _ => Expression::unknown(&block.opcode),
         }
+    }
+
+    fn math_expression(&self, block: &ScratchBlock, active: &mut HashSet<String>) -> Expression {
+        let Some(operator) = field_value(block, "OPERATOR").and_then(Value::as_str) else {
+            return Expression::unknown("missing OPERATOR field");
+        };
+        let value = self.input_expression(block.inputs.get("NUM"), active);
+        let fallback_value = value.text.clone();
+        let value = format!("({} as f64)", value.in_context(ATOM));
+        let expression = match operator {
+            "abs" => format!("{value}.abs()"),
+            "floor" => format!("{value}.floor()"),
+            "ceiling" => format!("{value}.ceil()"),
+            "sqrt" => format!("{value}.sqrt()"),
+            "sin" => format!("{value}.to_radians().sin()"),
+            "cos" => format!("{value}.to_radians().cos()"),
+            "tan" => format!("{value}.to_radians().tan()"),
+            "asin" => format!("{value}.asin().to_degrees()"),
+            "acos" => format!("{value}.acos().to_degrees()"),
+            "atan" => format!("{value}.atan().to_degrees()"),
+            "ln" => format!("{value}.ln()"),
+            "log" => format!("{value}.log10()"),
+            "e ^" => format!("{value}.exp()"),
+            "10 ^" => format!("10.0_f64.powf({value})"),
+            _ => return Expression::atom(format!("math({}, {fallback_value})", quote(operator))),
+        };
+        Expression::atom(expression)
     }
 
     fn boolean_input(
@@ -544,8 +574,11 @@ fn field_literal(block: &ScratchBlock, name: &str) -> String {
 
 fn text_literal(value: &Value) -> Expression {
     match value {
-        Value::String(text) => Expression::atom(quote(text)),
-        Value::Number(_) | Value::Bool(_) => Expression::atom(quote(&value.to_string())),
+        Value::String(text) => {
+            Expression::atom(numeric_string(text).unwrap_or_else(|| quote(text)))
+        }
+        Value::Number(_) => number_literal(value),
+        Value::Bool(_) => Expression::atom(quote(&value.to_string())),
         _ => Expression::unknown("invalid text literal"),
     }
 }
@@ -623,9 +656,18 @@ fn number_literal(value: &Value) -> Expression {
 
 fn scalar(value: &Value) -> String {
     match value {
-        Value::String(_) | Value::Number(_) | Value::Bool(_) => value.to_string(),
+        Value::String(text) => numeric_string(text).unwrap_or_else(|| quote(text)),
+        Value::Number(_) | Value::Bool(_) => value.to_string(),
         _ => Expression::unknown("unsupported variable value").text,
     }
+}
+
+fn numeric_string(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() || !text.parse::<f64>().is_ok_and(f64::is_finite) {
+        return None;
+    }
+    Some(number_literal(&Value::String(text.to_owned())).text)
 }
 
 fn quote(text: &str) -> String {
