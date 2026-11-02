@@ -93,6 +93,75 @@ mod tests {
     }
 
     #[test]
+    fn straight_line_blocks_share_one_resumable_dispatch_arm() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1",
+                    "isStage": false,
+                    "variables": {"first": ["first", 0], "second": ["second", 0]},
+                    "blocks": {
+                        "hat": {"opcode": "event_whenflagclicked", "next": "set_first", "topLevel": true, "inputs": {}, "fields": {}},
+                        "set_first": {"opcode": "data_setvariableto", "next": "set_second", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["first", "first"]}},
+                        "set_second": {"opcode": "data_setvariableto", "next": null, "inputs": {"VALUE": [1, [4, "2"]]}, "fields": {"VARIABLE": ["second", "second"]}}
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let output = generate(&project);
+        assert!(output.contains("0 => {\n                    let scratch_new_value"));
+        assert!(output.contains(
+            "state.set(0, scratch_new_value);\n                    let scratch_new_value"
+        ));
+        assert!(!output.contains("script.frames.last_mut().unwrap().pc = 1;"));
+        assert!(output.contains("script.frames.last_mut().unwrap().pc = usize::MAX;"));
+    }
+
+    #[test]
+    fn numeric_loops_use_native_locals_and_commit_before_safeguard_yields() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1",
+                    "isStage": false,
+                    "variables": {"count_id": ["count", 0]},
+                    "blocks": {
+                        "hat": {"opcode": "event_whenflagclicked", "next": "repeat", "topLevel": true, "inputs": {}, "fields": {}},
+                        "repeat": {"opcode": "control_repeat", "next": null, "inputs": {"TIMES": [1, [4, "10"]], "SUBSTACK": [2, "change"]}, "fields": {}},
+                        "change": {"opcode": "data_changevariableby", "next": null, "inputs": {"VALUE": [3, "multiply", [4, "0"]]}, "fields": {"VARIABLE": ["count", "count_id"]}},
+                        "multiply": {"opcode": "operator_multiply", "next": null, "inputs": {"NUM1": [1, [4, "1"]], "NUM2": [3, "equal", [4, "0"]]}, "fields": {}},
+                        "equal": {"opcode": "operator_equals", "next": null, "inputs": {"OPERAND1": [1, [10, "same"]], "OPERAND2": [1, [10, "same"]]}, "fields": {}}
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let output = generate(&project);
+        assert!(output.contains("let mut scratch_local_0 = scratch_to_number(state.get(0));"));
+        assert!(output.contains(
+            "scratch_local_0 = scratch_add(scratch_local_0, scratch_multiply(1.0_f64, true));"
+        ));
+        assert!(!output.contains("scratch_equals(\"same\", \"same\")"));
+        let safeguard = output
+            .find("if !scratch_warp_mode || script.warp_budget.expired(clock)")
+            .unwrap();
+        let commit = output[safeguard..]
+            .find("state.set(0, scratch_local_0.into());")
+            .unwrap()
+            + safeguard;
+        let yielded = output[commit..]
+            .find("return ScriptStatus::Yield;")
+            .unwrap()
+            + commit;
+        assert!(safeguard < commit && commit < yielded);
+    }
+
+    #[test]
     fn loop_lowering_borrows_variables_and_converts_only_dynamic_conditions() {
         let project = parse_project(
             &json!({
@@ -356,8 +425,8 @@ mod tests {
         let output = generate(&project);
         assert!(output.contains("fn step_green_flag_script_sprite1_1"));
         assert!(output.contains("fn step_green_flag_script_sprite1_2"));
-        assert!(output.contains("let scratch_new_value: ScratchValue = (1.0_f64).into();"));
-        assert!(output.contains("let scratch_new_value: ScratchValue = (2.0_f64).into();"));
+        assert!(output.contains("scratch_local_0 = 1.0_f64;"));
+        assert!(output.contains("scratch_local_0 = 2.0_f64;"));
         assert!(output.contains("fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_1(), new_green_flag_script_sprite1_2()] }"));
         assert!(output.contains("pub fn run_until_complete(&mut self)"));
         assert!(output.contains("pub fn step(&mut self) -> bool"));

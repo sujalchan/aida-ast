@@ -17,9 +17,9 @@
 //! allocates stable Rust identifiers for project variables, writes saved
 //! variable values, then delegates each target's scripts to the script module.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::parser::ScratchProject;
+use crate::parser::{InputValue, ScratchProject, ScratchTarget, parse_input};
 
 use super::{
     literals::{line, literal, quote},
@@ -32,6 +32,7 @@ pub(super) struct VariableInfo {
     pub(super) name: String,
     pub(super) target: String,
     pub(super) is_stage: bool,
+    pub(super) numeric: bool,
 }
 
 #[derive(Clone)]
@@ -145,6 +146,7 @@ pub fn generate(project: &ScratchProject) -> String {
 
 // assign each Scratch variable ID a stable shared-state slot.
 fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo> {
+    let numeric_variables = numeric_variables(project);
     let mut entries = BTreeMap::new();
     for target in &project.targets {
         for (id, variable) in &target.variables {
@@ -153,6 +155,7 @@ fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo>
                 name: variable.name.clone(),
                 target: target.name.clone(),
                 is_stage: target.is_stage,
+                numeric: numeric_variables.contains(id),
             });
             if target.is_stage {
                 info.name = variable.name.clone();
@@ -167,6 +170,89 @@ fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo>
         output.insert(id, info);
     }
     output
+}
+
+// prove variables numeric only when their saved value and every assignment are numeric.
+fn numeric_variables(project: &ScratchProject) -> HashSet<String> {
+    let mut numeric = project
+        .targets
+        .iter()
+        .flat_map(|target| &target.variables)
+        .filter(|(_, variable)| variable.value.is_number() && !variable.is_cloud)
+        .map(|(id, _)| id.clone())
+        .collect::<HashSet<_>>();
+
+    loop {
+        let previous = numeric.clone();
+        for target in &project.targets {
+            for block in target.blocks.values() {
+                if block.opcode != "data_setvariableto" {
+                    continue;
+                }
+                let Some(id) = block
+                    .fields
+                    .get("VARIABLE")
+                    .and_then(|field| field.as_array())
+                    .and_then(|field| field.get(1))
+                    .and_then(|id| id.as_str())
+                else {
+                    continue;
+                };
+                if !input_is_numeric(
+                    target,
+                    block.inputs.get("VALUE"),
+                    &previous,
+                    &mut HashSet::new(),
+                ) {
+                    numeric.remove(id);
+                }
+            }
+        }
+        if numeric == previous {
+            return numeric;
+        }
+    }
+}
+
+fn input_is_numeric(
+    target: &ScratchTarget,
+    input: Option<&serde_json::Value>,
+    numeric: &HashSet<String>,
+    active: &mut HashSet<String>,
+) -> bool {
+    match input.and_then(parse_input) {
+        Some(InputValue::Number(_)) => true,
+        Some(InputValue::VariableReference(reference)) => numeric.contains(reference.id),
+        Some(InputValue::BlockReference(id)) => {
+            if !active.insert(id.to_owned()) {
+                return false;
+            }
+            let result = target
+                .blocks
+                .get(id)
+                .is_some_and(|block| match block.opcode.as_str() {
+                    "operator_add" | "operator_subtract" | "operator_multiply"
+                    | "operator_divide" | "operator_mod" | "operator_round" | "operator_random"
+                    | "operator_mathop" | "data_lengthoflist" | "data_itemnumoflist" => true,
+                    "data_variable" => block
+                        .fields
+                        .get("VARIABLE")
+                        .and_then(|field| field.as_array())
+                        .and_then(|field| field.get(1))
+                        .and_then(|id| id.as_str())
+                        .is_some_and(|id| numeric.contains(id)),
+                    "math_number"
+                    | "math_integer"
+                    | "math_whole_number"
+                    | "math_positive_number"
+                    | "math_angle" => true,
+                    _ => false,
+                });
+            active.remove(id);
+            result
+        }
+        _ => false,
+    }
 }
 
 // assign each scratch list id a stable shared-state slot.

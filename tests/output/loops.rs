@@ -54,27 +54,31 @@ fn step_green_flag_script_stage_1(script: &mut ScriptState, state: &mut ScratchS
         match function {
             0 => match pc {
                 0 => {
-                let repeat_count = scratch_round(0.0_f64).max(0.0) as usize;
-                script.frames.last_mut().unwrap().repeat_counts[0] = repeat_count;
-                    if repeat_count == 0 {
-                        script.frames.last_mut().unwrap().pc = 3;
-                    } else {
-                        script.frames.last_mut().unwrap().pc = 2;
+                    let mut scratch_local_2 = scratch_to_number(state.get(2));
+                    let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    if !scratch_warp_mode { script.warp_budget.reset(); }
+                    let mut repeat_remaining = script.frames.last().unwrap().repeat_counts[0];
+                    if repeat_remaining == 0 {
+                        repeat_remaining = scratch_round(0.0_f64).max(0.0) as usize;
+                        script.frames.last_mut().unwrap().repeat_counts[0] = repeat_remaining;
                     }
-                    continue;
-                },
-                1 => {
-                    let repeat_remaining = script.frames.last().unwrap().repeat_counts[0].saturating_sub(1);
-                    script.frames.last_mut().unwrap().repeat_counts[0] = repeat_remaining;
-                    let next_pc = if repeat_remaining > 0 { 2 } else { 3 };
-                    script.frames.last_mut().unwrap().pc = next_pc;
-                    if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }
-                    continue;
-                },
-                2 => {
-                    let scratch_new_value: ScratchValue = scratch_add(state.get(2), 100.0_f64).into();
-                    state.set(2, scratch_new_value);
-                    script.frames.last_mut().unwrap().pc = 1;
+                    if repeat_remaining == 0 {
+                        script.frames.last_mut().unwrap().pc = 3;
+                        continue;
+                    }
+                    loop {
+                        scratch_local_2 = scratch_add(scratch_local_2, 100.0_f64);
+                        repeat_remaining -= 1;
+                        script.frames.last_mut().unwrap().repeat_counts[0] = repeat_remaining;
+                        if !scratch_warp_mode || script.warp_budget.expired(clock) {
+                            script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 { 0 } else { 3 };
+                            state.set(2, scratch_local_2.into());
+                            return ScriptStatus::Yield;
+                        }
+                        if repeat_remaining == 0 { break; }
+                    }
+                    state.set(2, scratch_local_2.into());
+                    script.frames.last_mut().unwrap().pc = 3;
                     continue;
                 },
                 3 => {
@@ -96,27 +100,31 @@ fn step_green_flag_script_stage_1(script: &mut ScriptState, state: &mut ScratchS
                     continue;
                 },
                 5 => {
-                let repeat_count = scratch_round(2.0_f64).max(0.0) as usize;
-                script.frames.last_mut().unwrap().repeat_counts[2] = repeat_count;
-                    if repeat_count == 0 {
-                        script.frames.last_mut().unwrap().pc = 4;
-                    } else {
-                        script.frames.last_mut().unwrap().pc = 7;
+                    let mut scratch_local_2 = scratch_to_number(state.get(2));
+                    let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    if !scratch_warp_mode { script.warp_budget.reset(); }
+                    let mut repeat_remaining = script.frames.last().unwrap().repeat_counts[2];
+                    if repeat_remaining == 0 {
+                        repeat_remaining = scratch_round(2.0_f64).max(0.0) as usize;
+                        script.frames.last_mut().unwrap().repeat_counts[2] = repeat_remaining;
                     }
-                    continue;
-                },
-                6 => {
-                    let repeat_remaining = script.frames.last().unwrap().repeat_counts[2].saturating_sub(1);
-                    script.frames.last_mut().unwrap().repeat_counts[2] = repeat_remaining;
-                    let next_pc = if repeat_remaining > 0 { 7 } else { 4 };
-                    script.frames.last_mut().unwrap().pc = next_pc;
-                    if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }
-                    continue;
-                },
-                7 => {
-                    let scratch_new_value: ScratchValue = scratch_add(state.get(2), 1.0_f64).into();
-                    state.set(2, scratch_new_value);
-                    script.frames.last_mut().unwrap().pc = 6;
+                    if repeat_remaining == 0 {
+                        script.frames.last_mut().unwrap().pc = 4;
+                        continue;
+                    }
+                    loop {
+                        scratch_local_2 = scratch_add(scratch_local_2, 1.0_f64);
+                        repeat_remaining -= 1;
+                        script.frames.last_mut().unwrap().repeat_counts[2] = repeat_remaining;
+                        if !scratch_warp_mode || script.warp_budget.expired(clock) {
+                            script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 { 5 } else { 4 };
+                            state.set(2, scratch_local_2.into());
+                            return ScriptStatus::Yield;
+                        }
+                        if repeat_remaining == 0 { break; }
+                    }
+                    state.set(2, scratch_local_2.into());
+                    script.frames.last_mut().unwrap().pc = 4;
                     continue;
                 },
                 8 => {
@@ -176,30 +184,27 @@ fn step_green_flag_script_stage_2(script: &mut ScriptState, state: &mut ScratchS
         match function {
             0 => match pc {
                 0 => {
-                    let scratch_new_value: ScratchValue = (scratch_equals(1.0_f64, 1.0_f64)).into();
+                    let scratch_new_value: ScratchValue = (true).into();
                     state.set(1, scratch_new_value);
-                    script.frames.last_mut().unwrap().pc = 1;
-                    continue;
-                },
-                1 => {
                     let scratch_new_value: ScratchValue = (state.get(1)).clone();
                     state.set(0, scratch_new_value);
                     script.frames.last_mut().unwrap().pc = 2;
                     continue;
                 },
                 2 => {
-                    script.frames.last_mut().unwrap().pc = 4;
-                    continue;
-                },
-                3 => {
-                    script.frames.last_mut().unwrap().pc = 2;
-                    if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }
-                    continue;
-                },
-                4 => {
-                    let scratch_new_value: ScratchValue = scratch_add(state.get(2), 1.0_f64).into();
-                    state.set(2, scratch_new_value);
-                    script.frames.last_mut().unwrap().pc = 3;
+                    let mut scratch_local_2 = scratch_to_number(state.get(2));
+                    let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    if !scratch_warp_mode { script.warp_budget.reset(); }
+                    loop {
+                        scratch_local_2 = scratch_add(scratch_local_2, 1.0_f64);
+                        if !scratch_warp_mode || script.warp_budget.expired(clock) {
+                            script.frames.last_mut().unwrap().pc = 2;
+                            state.set(2, scratch_local_2.into());
+                            return ScriptStatus::Yield;
+                        }
+                    }
+                    state.set(2, scratch_local_2.into());
+                    script.frames.last_mut().unwrap().pc = usize::MAX;
                     continue;
                 },
                 _ => return ScriptStatus::Complete,

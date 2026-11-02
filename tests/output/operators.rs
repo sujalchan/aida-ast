@@ -55,36 +55,338 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
             0 => match pc {
                 0 => {
                     state.list_mut(0).delete_all();
-                    script.frames.last_mut().unwrap().pc = 1;
-                    continue;
-                },
-                1 => {
                     let scratch_list_item: ScratchValue = (1.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 2;
-                    continue;
-                },
-                2 => {
                     let scratch_new_value: ScratchValue = (scratch_add(1.0_f64, 1.0_f64)).into();
                     state.set(1, scratch_new_value);
-                    script.frames.last_mut().unwrap().pc = 3;
+                    print_value!("add_1_plus_1", state.get(1));
+                    let scratch_new_value: ScratchValue = (scratch_divide(1.0_f64, 5.0_f64)).into();
+                    state.set(17, scratch_new_value);
+                    print_value!("divide_1_by_5", state.get(17));
+                    let scratch_new_value: ScratchValue = (scratch_multiply(1.0_f64, 5.0_f64)).into();
+                    state.set(3, scratch_new_value);
+                    print_value!("multiply_1_by_5", state.get(3));
+                    let scratch_new_value: ScratchValue = (scratch_mod(4.0_f64, 5.0_f64)).into();
+                    state.set(6, scratch_new_value);
+                    print_value!("mod_4_by_5", state.get(6));
+                    let scratch_new_value: ScratchValue = (scratch_random("1", "10")).into();
+                    state.set(2, scratch_new_value);
+                    print_value!("random_1_to_10", state.get(2));
+                    let scratch_new_value: ScratchValue = (scratch_random("10", "-10.0")).into();
+                    state.set(18, scratch_new_value);
+                    print_value!("random_10_to_negative_10", state.get(18));
+                    let scratch_new_value: ScratchValue = (scratch_greater_than("banana", "0.0")).into();
+                    state.set(13, scratch_new_value);
+                    print_value!("banana_greater_than_zero", state.get(13));
+                    let scratch_new_value: ScratchValue = (scratch_less_than("banana", "0.0")).into();
+                    state.set(12, scratch_new_value);
+                    print_value!("banana_less_than_zero", state.get(12));
+                    let scratch_new_value: ScratchValue = (scratch_greater_than("0.0", "0.0")).into();
+                    state.set(4, scratch_new_value);
+                    print_value!("zero_greater_than_zero", state.get(4));
+                    let scratch_new_value: ScratchValue = (scratch_less_than("0.0", "0.0")).into();
+                    state.set(9, scratch_new_value);
+                    print_value!("zero_less_than_zero", state.get(9));
+                    let scratch_new_value: ScratchValue = (scratch_greater_than("5", "4")).into();
+                    state.set(14, scratch_new_value);
+                    print_value!("five_greater_than_four", state.get(14));
+                    let scratch_new_value: ScratchValue = (scratch_less_than("5", "4")).into();
+                    state.set(15, scratch_new_value);
+                    print_value!("five_less_than_four", state.get(15));
+                    let scratch_new_value: ScratchValue = (scratch_join("apple ", "banana")).into();
+                    state.set(10, scratch_new_value);
+                    print_value!("join_apple_and_banana", state.get(10));
+                    let scratch_new_value: ScratchValue = (scratch_letter(1.0_f64, "apple")).into();
+                    state.set(16, scratch_new_value);
+                    print_value!("first_letter_of_apple", state.get(16));
+                    let scratch_new_value: ScratchValue = (scratch_contains("apple", "a")).into();
+                    state.set(19, scratch_new_value);
+                    print_value!("apple_contains_a", state.get(19));
+                    let scratch_new_value: ScratchValue = (scratch_contains("1234", "34")).into();
+                    state.set(5, scratch_new_value);
+                    print_value!("digits_contain_34", state.get(5));
+                    let scratch_new_value: ScratchValue = (scratch_round(1.4_f64)).into();
+                    state.set(11, scratch_new_value);
+                    print_value!("round_1_4", state.get(11));
+                    let scratch_new_value: ScratchValue = (scratch_round(1.5_f64)).into();
+                    state.set(7, scratch_new_value);
+                    print_value!("round_1_5", state.get(7));
+                    let scratch_new_value: ScratchValue = ((-5.0_f64).abs()).into();
+                    state.set(0, scratch_new_value);
+                    print_value!("absolute_value_of_negative_5", state.get(0));
+                    let scratch_new_value: ScratchValue = (5.5_f64.floor()).into();
+                    state.set(46, scratch_new_value);
+                    print_value!("floor_of_5_5", state.get(46));
+                    let scratch_new_value: ScratchValue = (5.5_f64.ceil()).into();
+                    state.set(8, scratch_new_value);
+                    print_value!("ceiling_of_5_5", state.get(8));
+                    let scratch_new_value: ScratchValue = (scratch_subtract(9.0_f64, 4.0_f64)).into();
+                    state.set(28, scratch_new_value);
+                    print_value!("subtract_9_minus_4", state.get(28));
+                    let scratch_new_value: ScratchValue = (true).into();
+                    state.set(29, scratch_new_value);
+                    print_value!("equal_same_text", state.get(29));
+                    let scratch_new_value: ScratchValue = (scratch_and(false, false)).into();
+                    state.set(30, scratch_new_value);
+                    print_value!("and_false_false", state.get(30));
+                    let scratch_new_value: ScratchValue = (scratch_or(false, false)).into();
+                    state.set(31, scratch_new_value);
+                    print_value!("or_false_true", state.get(31));
+                    let scratch_new_value: ScratchValue = (scratch_not(false)).into();
+                    state.set(32, scratch_new_value);
+                    print_value!("not_false", state.get(32));
+                    let scratch_new_value: ScratchValue = (scratch_length("Scratch")).into();
+                    state.set(33, scratch_new_value);
+                    print_value!("length_of_scratch", state.get(33));
+                    let scratch_new_value: ScratchValue = (9.0_f64.sqrt()).into();
+                    state.set(34, scratch_new_value);
+                    print_value!("square_root_of_9", state.get(34));
+                    let scratch_new_value: ScratchValue = (scratch_sin(30.0_f64)).into();
+                    state.set(35, scratch_new_value);
+                    print_value!("sine_of_30_degrees", state.get(35));
+                    let scratch_new_value: ScratchValue = (scratch_cos(60.0_f64)).into();
+                    state.set(36, scratch_new_value);
+                    print_value!("cosine_of_60_degrees", state.get(36));
+                    let scratch_new_value: ScratchValue = (scratch_tan(45.0_f64)).into();
+                    state.set(37, scratch_new_value);
+                    print_value!("tangent_of_45_degrees", state.get(37));
+                    let scratch_new_value: ScratchValue = (scratch_asin_degrees(0.5_f64)).into();
+                    state.set(38, scratch_new_value);
+                    print_value!("arcsine_of_0_5", state.get(38));
+                    let scratch_new_value: ScratchValue = (scratch_acos_degrees(0.5_f64)).into();
+                    state.set(39, scratch_new_value);
+                    print_value!("arccosine_of_0_5", state.get(39));
+                    let scratch_new_value: ScratchValue = (scratch_atan_degrees(1.0_f64)).into();
+                    state.set(40, scratch_new_value);
+                    print_value!("arctangent_of_1", state.get(40));
+                    let scratch_new_value: ScratchValue = (10.0_f64.ln()).into();
+                    state.set(41, scratch_new_value);
+                    print_value!("natural_log_of_10", state.get(41));
+                    let scratch_new_value: ScratchValue = (10.0_f64.log10()).into();
+                    state.set(42, scratch_new_value);
+                    print_value!("log_base_10_of_10", state.get(42));
+                    let scratch_new_value: ScratchValue = (2.0_f64.exp()).into();
+                    state.set(43, scratch_new_value);
+                    print_value!("e_to_the_power_2", state.get(43));
+                    let scratch_new_value: ScratchValue = (10.0_f64.powf(3.0_f64)).into();
+                    state.set(44, scratch_new_value);
+                    print_value!("10_to_the_power_3", state.get(44));
+                    let scratch_new_value: ScratchValue = (1.0_f64).into();
+                    state.set(20, scratch_new_value);
+                    let scratch_new_value: ScratchValue = (0.0_f64).into();
+                    state.set(22, scratch_new_value);
+                    script.frames.last_mut().unwrap().pc = 80;
                     continue;
                 },
-                3 => {
+                80 => {
+                    let mut scratch_local_20 = scratch_to_number(state.get(20));
+                    let mut scratch_local_22 = scratch_to_number(state.get(22));
+                    let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    if !scratch_warp_mode { script.warp_budget.reset(); }
+                    let mut repeat_remaining = script.frames.last().unwrap().repeat_counts[0];
+                    if repeat_remaining == 0 {
+                        repeat_remaining = scratch_round(4.0_f64).max(0.0) as usize;
+                        script.frames.last_mut().unwrap().repeat_counts[0] = repeat_remaining;
+                    }
+                    if repeat_remaining == 0 {
+                        script.frames.last_mut().unwrap().pc = 84;
+                        continue;
+                    }
+                    loop {
+                        scratch_local_22 = scratch_add(scratch_local_22, scratch_multiply(scratch_local_20, scratch_local_20));
+                        scratch_local_20 = scratch_add(scratch_local_20, 1.0_f64);
+                        repeat_remaining -= 1;
+                        script.frames.last_mut().unwrap().repeat_counts[0] = repeat_remaining;
+                        if !scratch_warp_mode || script.warp_budget.expired(clock) {
+                            script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 { 80 } else { 84 };
+                            state.set(20, scratch_local_20.into());
+                            state.set(22, scratch_local_22.into());
+                            return ScriptStatus::Yield;
+                        }
+                        if repeat_remaining == 0 { break; }
+                    }
+                    state.set(20, scratch_local_20.into());
+                    state.set(22, scratch_local_22.into());
+                    script.frames.last_mut().unwrap().pc = 84;
+                    continue;
+                },
+                84 => {
+                    print_value!("sum_of_squares", state.get(22));
+                    let scratch_new_value: ScratchValue = (256.0_f64).into();
+                    state.set(21, scratch_new_value);
+                    script.frames.last_mut().unwrap().pc = 86;
+                    continue;
+                },
+                86 => {
+                    let mut scratch_local_21 = scratch_to_number(state.get(21));
+                    let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    if !scratch_warp_mode { script.warp_budget.reset(); }
+                    let mut repeat_remaining = script.frames.last().unwrap().repeat_counts[1];
+                    if repeat_remaining == 0 {
+                        repeat_remaining = scratch_round(3.0_f64).max(0.0) as usize;
+                        script.frames.last_mut().unwrap().repeat_counts[1] = repeat_remaining;
+                    }
+                    if repeat_remaining == 0 {
+                        script.frames.last_mut().unwrap().pc = 89;
+                        continue;
+                    }
+                    loop {
+                        scratch_local_21 = (scratch_to_number(scratch_local_21)).sqrt();
+                        repeat_remaining -= 1;
+                        script.frames.last_mut().unwrap().repeat_counts[1] = repeat_remaining;
+                        if !scratch_warp_mode || script.warp_budget.expired(clock) {
+                            script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 { 86 } else { 89 };
+                            state.set(21, scratch_local_21.into());
+                            return ScriptStatus::Yield;
+                        }
+                        if repeat_remaining == 0 { break; }
+                    }
+                    state.set(21, scratch_local_21.into());
+                    script.frames.last_mut().unwrap().pc = 89;
+                    continue;
+                },
+                89 => {
+                    print_value!("repeated_square_root", state.get(21));
+                    let scratch_new_value: ScratchValue = (1.0_f64).into();
+                    state.set(23, scratch_new_value);
+                    let scratch_new_value: ScratchValue = (0.0_f64).into();
+                    state.set(24, scratch_new_value);
+                    script.frames.last_mut().unwrap().pc = 92;
+                    continue;
+                },
+                92 => {
+                    let mut scratch_local_23 = scratch_to_number(state.get(23));
+                    let mut scratch_local_24 = scratch_to_number(state.get(24));
+                    let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    if !scratch_warp_mode { script.warp_budget.reset(); }
+                    loop {
+                        if scratch_greater_than(scratch_local_23, 3.0_f64) { break; }
+                        scratch_local_24 = scratch_add(scratch_local_24, scratch_local_23);
+                        scratch_local_23 = scratch_add(scratch_local_23, 1.0_f64);
+                        if !scratch_warp_mode || script.warp_budget.expired(clock) {
+                            script.frames.last_mut().unwrap().pc = 92;
+                            state.set(23, scratch_local_23.into());
+                            state.set(24, scratch_local_24.into());
+                            return ScriptStatus::Yield;
+                        }
+                    }
+                    state.set(23, scratch_local_23.into());
+                    state.set(24, scratch_local_24.into());
+                    script.frames.last_mut().unwrap().pc = 96;
+                    continue;
+                },
+                96 => {
+                    print_value!("until_sum", state.get(24));
+                    let scratch_new_value: ScratchValue = (3.0_f64).into();
+                    state.set(25, scratch_new_value);
+                    let scratch_new_value: ScratchValue = (1.0_f64).into();
+                    state.set(26, scratch_new_value);
+                    script.frames.last_mut().unwrap().pc = 99;
+                    continue;
+                },
+                99 => {
+                    let mut scratch_local_25 = scratch_to_number(state.get(25));
+                    let mut scratch_local_26 = scratch_to_number(state.get(26));
+                    let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    if !scratch_warp_mode { script.warp_budget.reset(); }
+                    loop {
+                        if !(scratch_greater_than(scratch_local_25, 0.0_f64)) { break; }
+                        scratch_local_26 = scratch_multiply(scratch_local_26, scratch_local_25);
+                        scratch_local_25 = scratch_add(scratch_local_25, -1.0_f64);
+                        if !scratch_warp_mode || script.warp_budget.expired(clock) {
+                            script.frames.last_mut().unwrap().pc = 99;
+                            state.set(25, scratch_local_25.into());
+                            state.set(26, scratch_local_26.into());
+                            return ScriptStatus::Yield;
+                        }
+                    }
+                    state.set(25, scratch_local_25.into());
+                    state.set(26, scratch_local_26.into());
+                    script.frames.last_mut().unwrap().pc = 103;
+                    continue;
+                },
+                103 => {
+                    print_value!("while_product", state.get(26));
+                    script.frames.last_mut().unwrap().pc = 104;
+                    continue;
+                },
+                104 => {
+                    let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    script.frames.last_mut().unwrap().pc = 105;
+                    script.frames.push(ProcedureFrame { function: 1, pc: 0, repeat_counts: vec![0; 1], wait_deadlines: vec![None; 0], arguments: vec![("5").to_owned().into()], warp_mode: inherited_warp || true });
+                    let recursive_call = script.frames.iter().filter(|frame| frame.function == script.frames.last().unwrap().function).count() > 1;
+                    if recursive_call && !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }
+                    if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                    continue;
+                },
+                105 => {
+                    let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    script.frames.last_mut().unwrap().pc = 106;
+                    script.frames.push(ProcedureFrame { function: 2, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 0], arguments: vec![("5").to_owned().into()], warp_mode: inherited_warp || false });
+                    let recursive_call = script.frames.iter().filter(|frame| frame.function == script.frames.last().unwrap().function).count() > 1;
+                    if recursive_call && !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }
+                    if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                    continue;
+                },
+                106 => {
+                    let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    script.frames.last_mut().unwrap().pc = 107;
+                    script.frames.push(ProcedureFrame { function: 3, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 0], arguments: vec![(42.0_f64).to_owned().into()], warp_mode: inherited_warp || false });
+                    let recursive_call = script.frames.iter().filter(|frame| frame.function == script.frames.last().unwrap().function).count() > 1;
+                    if recursive_call && !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }
+                    if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                    continue;
+                },
+                107 => {
+                    let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    script.frames.last_mut().unwrap().pc = 108;
+                    script.frames.push(ProcedureFrame { function: 3, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 0], arguments: vec![("Q").to_owned().into()], warp_mode: inherited_warp || false });
+                    let recursive_call = script.frames.iter().filter(|frame| frame.function == script.frames.last().unwrap().function).count() > 1;
+                    if recursive_call && !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }
+                    if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                    continue;
+                },
+                108 => {
+                    let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    script.frames.last_mut().unwrap().pc = 109;
+                    script.frames.push(ProcedureFrame { function: 1, pc: 0, repeat_counts: vec![0; 1], wait_deadlines: vec![None; 0], arguments: vec![("apple").to_owned().into()], warp_mode: inherited_warp || true });
+                    let recursive_call = script.frames.iter().filter(|frame| frame.function == script.frames.last().unwrap().function).count() > 1;
+                    if recursive_call && !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }
+                    if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                    continue;
+                },
+                109 => {
+                    let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    script.frames.last_mut().unwrap().pc = 110;
+                    script.frames.push(ProcedureFrame { function: 2, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 0], arguments: vec![("banana").to_owned().into()], warp_mode: inherited_warp || false });
+                    let recursive_call = script.frames.iter().filter(|frame| frame.function == script.frames.last().unwrap().function).count() > 1;
+                    if recursive_call && !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }
+                    if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                    continue;
+                },
+                110 => {
+                    let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    script.frames.last_mut().unwrap().pc = 111;
+                    script.frames.push(ProcedureFrame { function: 4, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 0], arguments: vec![(scratch_equals("A", "a")).to_owned().into()], warp_mode: inherited_warp || false });
+                    let recursive_call = script.frames.iter().filter(|frame| frame.function == script.frames.last().unwrap().function).count() > 1;
+                    if recursive_call && !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }
+                    if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                    continue;
+                },
+                111 => {
+                    let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);
+                    script.frames.last_mut().unwrap().pc = 112;
+                    script.frames.push(ProcedureFrame { function: 4, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 0], arguments: vec![(scratch_equals("A", "B")).to_owned().into()], warp_mode: inherited_warp || false });
+                    let recursive_call = script.frames.iter().filter(|frame| frame.function == script.frames.last().unwrap().function).count() > 1;
+                    if recursive_call && !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }
+                    if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                    continue;
+                },
+                112 => {
                     let scratch_list_item: ScratchValue = (2.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 4;
-                    continue;
-                },
-                4 => {
-                    print_value!("add_1_plus_1", state.get(1));
-                    script.frames.last_mut().unwrap().pc = 5;
-                    continue;
-                },
-                5 => {
-                    let scratch_list_item: ScratchValue = (3.0_f64).into();
-                    state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 3;
+                    print_value!("say", state.list(0).contents());
+                    script.frames.last_mut().unwrap().pc = usize::MAX;
                     continue;
                 },
                 _ => return ScriptStatus::Complete,
@@ -181,7 +483,7 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
     }
 }
 
-fn new_green_flag_script_sprite1_1() -> GeneratedScript { GeneratedScript::Script1(ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 0], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+fn new_green_flag_script_sprite1_1() -> GeneratedScript { GeneratedScript::Script1(ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 2], wait_deadlines: vec![None; 0], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
 
 #[allow(dead_code, unused_variables, unused_mut, unused_assignments, unreachable_code)]
 fn step_green_flag_script_sprite1_2(script: &mut ScriptState, state: &mut ScratchState, clock: &dyn Clock) -> ScriptStatus {
@@ -194,116 +496,40 @@ fn step_green_flag_script_sprite1_2(script: &mut ScriptState, state: &mut Scratc
             0 => match pc {
                 0 => {
                     state.list_mut(1).delete_all();
-                    script.frames.last_mut().unwrap().pc = 1;
-                    continue;
-                },
-                1 => {
                     let scratch_list_item: ScratchValue = (4.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 2;
-                    continue;
-                },
-                2 => {
                     let scratch_list_item: ScratchValue = (10.0_f64).into();
                     state.list_mut(1).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 3;
-                    continue;
-                },
-                3 => {
                     let scratch_list_item: ScratchValue = (5.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 4;
-                    continue;
-                },
-                4 => {
                     let scratch_list_item: ScratchValue = ("apple").into();
                     state.list_mut(1).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 5;
-                    continue;
-                },
-                5 => {
                     let scratch_list_item: ScratchValue = (6.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 6;
-                    continue;
-                },
-                6 => {
                     let scratch_list_item: ScratchValue = ("start").into();
                     let scratch_list_index: ScratchValue = (1.0_f64).into();
                     state.list_mut(1).insert(scratch_list_item, scratch_list_index);
-                    script.frames.last_mut().unwrap().pc = 7;
-                    continue;
-                },
-                7 => {
                     let scratch_list_item: ScratchValue = (7.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 8;
-                    continue;
-                },
-                8 => {
                     let scratch_list_item: ScratchValue = (20.0_f64).into();
                     let scratch_list_index: ScratchValue = (2.0_f64).into();
                     state.list_mut(1).replace(scratch_list_index, scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 9;
-                    continue;
-                },
-                9 => {
                     let scratch_list_item: ScratchValue = (8.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 10;
-                    continue;
-                },
-                10 => {
                     let scratch_list_index: ScratchValue = (3.0_f64).into();
                     state.list_mut(1).delete(scratch_list_index);
-                    script.frames.last_mut().unwrap().pc = 11;
-                    continue;
-                },
-                11 => {
                     let scratch_list_item: ScratchValue = (9.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 12;
-                    continue;
-                },
-                12 => {
                     print_value!("say", state.list(1).get(1.0_f64));
-                    script.frames.last_mut().unwrap().pc = 13;
-                    continue;
-                },
-                13 => {
                     let scratch_list_item: ScratchValue = (10.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 14;
-                    continue;
-                },
-                14 => {
                     print_value!("say", state.list(1).length() as f64);
-                    script.frames.last_mut().unwrap().pc = 15;
-                    continue;
-                },
-                15 => {
                     let scratch_list_item: ScratchValue = (11.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 16;
-                    continue;
-                },
-                16 => {
                     print_value!("say", state.list(1).contains(20.0_f64));
-                    script.frames.last_mut().unwrap().pc = 17;
-                    continue;
-                },
-                17 => {
                     let scratch_list_item: ScratchValue = (12.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 18;
-                    continue;
-                },
-                18 => {
                     print_value!("say", state.list(1).item_number("start") as f64);
-                    script.frames.last_mut().unwrap().pc = 19;
-                    continue;
-                },
-                19 => {
                     let scratch_list_item: ScratchValue = (13.0_f64).into();
                     state.list_mut(0).add(scratch_list_item);
                     script.frames.last_mut().unwrap().pc = usize::MAX;
@@ -415,7 +641,7 @@ impl GeneratedProgram {
     pub fn new() -> Self { Self::build(None) }
     pub fn new_with_clock(clock: Box<dyn Clock>) -> Self { Self::build(Some(clock)) }
     fn build(clock: Option<Box<dyn Clock>>) -> Self {
-    let state = ScratchState::with_project_data(vec![(5.0_f64).into(), (2.0_f64).into(), (8.0_f64).into(), (5.0_f64).into(), (false).into(), (true).into(), (4.0_f64).into(), (2.0_f64).into(), (6.0_f64).into(), (false).into(), ("apple banana").into(), (1.0_f64).into(), (false).into(), (true).into(), (true).into(), (false).into(), ("a").into(), (0.2_f64).into(), (1.0138556845426017_f64).into(), (true).into(), (5.0_f64).into(), (2.0_f64).into(), (30.0_f64).into(), (4.0_f64).into(), (6.0_f64).into(), (0.0_f64).into(), (6.0_f64).into(), (-1.0_f64).into(), (5.0_f64).into(), (true).into(), (false).into(), (false).into(), (true).into(), (7.0_f64).into(), (3.0_f64).into(), (0.5_f64).into(), (0.5_f64).into(), (1.0_f64).into(), (30.000000000000004_f64).into(), (60.00000000000001_f64).into(), (45.0_f64).into(), (2.302585092994046_f64).into(), (1.0_f64).into(), (7.38905609893065_f64).into(), (1000.0_f64).into(), (0.0_f64).into(), (5.0_f64).into()], vec![ScratchVariableMetadata::new("!KOc;W%O4Yj_v]8dqD|]", "absolute_value_of_negative_5", "Stage", true), ScratchVariableMetadata::new("*rR}=_*_~#O%^Wfe-i^p", "add_1_plus_1", "Stage", true), ScratchVariableMetadata::new(",-n(ps9{MDU?yaPB:*AX", "random_1_to_10", "Stage", true), ScratchVariableMetadata::new("-HohZ8~zb83?{$z+F99p", "multiply_1_by_5", "Stage", true), ScratchVariableMetadata::new("0#]u/vH!?$g6/Y:h}5$[", "zero_greater_than_zero", "Stage", true), ScratchVariableMetadata::new("0{jia(J2W6]OBUBsT}vd", "digits_contain_34", "Stage", true), ScratchVariableMetadata::new("2.th4xnyEm#0^=~.MrI2", "mod_4_by_5", "Stage", true), ScratchVariableMetadata::new(";e/Wco}uJz[J9,b;#WlQ", "round_1_5", "Stage", true), ScratchVariableMetadata::new("@.+awex]1ZI=@zI3fg*d", "ceiling_of_5_5", "Stage", true), ScratchVariableMetadata::new("CI):ig}~zm(%$N#y6Tjt", "zero_less_than_zero", "Stage", true), ScratchVariableMetadata::new("ITUrz93KPUt`N,dO.i`8", "join_apple_and_banana", "Stage", true), ScratchVariableMetadata::new("L5c94E6i~3Wngi=xoOM@", "round_1_4", "Stage", true), ScratchVariableMetadata::new("Mim{Gt+O|fQpWuBU=vsr", "banana_less_than_zero", "Stage", true), ScratchVariableMetadata::new("PWn)dZ`[GI[d6C|GyBd3", "banana_greater_than_zero", "Stage", true), ScratchVariableMetadata::new("S./,BZ2K`-8q[q7VPRI1", "five_greater_than_four", "Stage", true), ScratchVariableMetadata::new("Uj]Yh]MozPx]((v7xWz`", "five_less_than_four", "Stage", true), ScratchVariableMetadata::new("XTiLe92muTCfMJrJ_M(~", "first_letter_of_apple", "Stage", true), ScratchVariableMetadata::new("^pDcW=fb8]aKZK)jJ:4n", "divide_1_by_5", "Stage", true), ScratchVariableMetadata::new("e?9M^_O`oxCA8I5+%@):", "random_10_to_negative_10", "Stage", true), ScratchVariableMetadata::new("hcACFnwsjpSXLobe?5qR", "apple_contains_a", "Stage", true), ScratchVariableMetadata::new("loop_demo_index_variable", "square_loop_index", "Stage", true), ScratchVariableMetadata::new("loop_demo_sqrt_variable", "repeated_square_root", "Stage", true), ScratchVariableMetadata::new("loop_demo_sum_variable", "sum_of_squares", "Stage", true), ScratchVariableMetadata::new("loop_demo_until_counter_variable", "until_counter", "Stage", true), ScratchVariableMetadata::new("loop_demo_until_sum_variable", "until_sum", "Stage", true), ScratchVariableMetadata::new("loop_demo_while_counter_variable", "while_counter", "Stage", true), ScratchVariableMetadata::new("loop_demo_while_product_variable", "while_product", "Stage", true), ScratchVariableMetadata::new("normal_math_result_var", "normal_math_result", "Sprite1", false), ScratchVariableMetadata::new("operator_test_var_22", "subtract_9_minus_4", "Stage", true), ScratchVariableMetadata::new("operator_test_var_23", "equal_same_text", "Stage", true), ScratchVariableMetadata::new("operator_test_var_24", "and_false_false", "Stage", true), ScratchVariableMetadata::new("operator_test_var_25", "or_false_true", "Stage", true), ScratchVariableMetadata::new("operator_test_var_26", "not_false", "Stage", true), ScratchVariableMetadata::new("operator_test_var_27", "length_of_scratch", "Stage", true), ScratchVariableMetadata::new("operator_test_var_28", "square_root_of_9", "Stage", true), ScratchVariableMetadata::new("operator_test_var_29", "sine_of_30_degrees", "Stage", true), ScratchVariableMetadata::new("operator_test_var_30", "cosine_of_60_degrees", "Stage", true), ScratchVariableMetadata::new("operator_test_var_31", "tangent_of_45_degrees", "Stage", true), ScratchVariableMetadata::new("operator_test_var_32", "arcsine_of_0_5", "Stage", true), ScratchVariableMetadata::new("operator_test_var_33", "arccosine_of_0_5", "Stage", true), ScratchVariableMetadata::new("operator_test_var_34", "arctangent_of_1", "Stage", true), ScratchVariableMetadata::new("operator_test_var_35", "natural_log_of_10", "Stage", true), ScratchVariableMetadata::new("operator_test_var_36", "log_base_10_of_10", "Stage", true), ScratchVariableMetadata::new("operator_test_var_37", "e_to_the_power_2", "Stage", true), ScratchVariableMetadata::new("operator_test_var_38", "10_to_the_power_3", "Stage", true), ScratchVariableMetadata::new("warp_math_result_var", "warp_math_result", "Sprite1", false), ScratchVariableMetadata::new("z^xm8m%!CqOL_3#eBIfp", "floor_of_5_5", "Stage", true)], vec![ScratchList::new(vec![(1.0_f64).into(), (2.0_f64).into()]), ScratchList::new(vec![("start").into(), (20.0_f64).into()])], vec![ScratchListMetadata::new("]a}Fl@l+VAx!V+d;HXik", "execution order", "Stage", true), ScratchListMetadata::new("operator_list_id", "operator_examples", "Sprite1", false)], vec![false; 2]);
+    let state = ScratchState::with_project_data(vec![(5.0_f64).into(), (2.0_f64).into(), (5.0_f64).into(), (5.0_f64).into(), (false).into(), (true).into(), (4.0_f64).into(), (2.0_f64).into(), (6.0_f64).into(), (false).into(), ("apple banana").into(), (1.0_f64).into(), (false).into(), (true).into(), (true).into(), (false).into(), ("a").into(), (0.2_f64).into(), (4.277094425307563_f64).into(), (true).into(), (5.0_f64).into(), (2.0_f64).into(), (30.0_f64).into(), (4.0_f64).into(), (6.0_f64).into(), (0.0_f64).into(), (6.0_f64).into(), (-1.0_f64).into(), (5.0_f64).into(), (true).into(), (false).into(), (false).into(), (true).into(), (7.0_f64).into(), (3.0_f64).into(), (0.5_f64).into(), (0.5_f64).into(), (1.0_f64).into(), (30.000000000000004_f64).into(), (60.00000000000001_f64).into(), (45.0_f64).into(), (2.302585092994046_f64).into(), (1.0_f64).into(), (7.38905609893065_f64).into(), (1000.0_f64).into(), (0.0_f64).into(), (5.0_f64).into()], vec![ScratchVariableMetadata::new("!KOc;W%O4Yj_v]8dqD|]", "absolute_value_of_negative_5", "Stage", true), ScratchVariableMetadata::new("*rR}=_*_~#O%^Wfe-i^p", "add_1_plus_1", "Stage", true), ScratchVariableMetadata::new(",-n(ps9{MDU?yaPB:*AX", "random_1_to_10", "Stage", true), ScratchVariableMetadata::new("-HohZ8~zb83?{$z+F99p", "multiply_1_by_5", "Stage", true), ScratchVariableMetadata::new("0#]u/vH!?$g6/Y:h}5$[", "zero_greater_than_zero", "Stage", true), ScratchVariableMetadata::new("0{jia(J2W6]OBUBsT}vd", "digits_contain_34", "Stage", true), ScratchVariableMetadata::new("2.th4xnyEm#0^=~.MrI2", "mod_4_by_5", "Stage", true), ScratchVariableMetadata::new(";e/Wco}uJz[J9,b;#WlQ", "round_1_5", "Stage", true), ScratchVariableMetadata::new("@.+awex]1ZI=@zI3fg*d", "ceiling_of_5_5", "Stage", true), ScratchVariableMetadata::new("CI):ig}~zm(%$N#y6Tjt", "zero_less_than_zero", "Stage", true), ScratchVariableMetadata::new("ITUrz93KPUt`N,dO.i`8", "join_apple_and_banana", "Stage", true), ScratchVariableMetadata::new("L5c94E6i~3Wngi=xoOM@", "round_1_4", "Stage", true), ScratchVariableMetadata::new("Mim{Gt+O|fQpWuBU=vsr", "banana_less_than_zero", "Stage", true), ScratchVariableMetadata::new("PWn)dZ`[GI[d6C|GyBd3", "banana_greater_than_zero", "Stage", true), ScratchVariableMetadata::new("S./,BZ2K`-8q[q7VPRI1", "five_greater_than_four", "Stage", true), ScratchVariableMetadata::new("Uj]Yh]MozPx]((v7xWz`", "five_less_than_four", "Stage", true), ScratchVariableMetadata::new("XTiLe92muTCfMJrJ_M(~", "first_letter_of_apple", "Stage", true), ScratchVariableMetadata::new("^pDcW=fb8]aKZK)jJ:4n", "divide_1_by_5", "Stage", true), ScratchVariableMetadata::new("e?9M^_O`oxCA8I5+%@):", "random_10_to_negative_10", "Stage", true), ScratchVariableMetadata::new("hcACFnwsjpSXLobe?5qR", "apple_contains_a", "Stage", true), ScratchVariableMetadata::new("loop_demo_index_variable", "square_loop_index", "Stage", true), ScratchVariableMetadata::new("loop_demo_sqrt_variable", "repeated_square_root", "Stage", true), ScratchVariableMetadata::new("loop_demo_sum_variable", "sum_of_squares", "Stage", true), ScratchVariableMetadata::new("loop_demo_until_counter_variable", "until_counter", "Stage", true), ScratchVariableMetadata::new("loop_demo_until_sum_variable", "until_sum", "Stage", true), ScratchVariableMetadata::new("loop_demo_while_counter_variable", "while_counter", "Stage", true), ScratchVariableMetadata::new("loop_demo_while_product_variable", "while_product", "Stage", true), ScratchVariableMetadata::new("normal_math_result_var", "normal_math_result", "Sprite1", false), ScratchVariableMetadata::new("operator_test_var_22", "subtract_9_minus_4", "Stage", true), ScratchVariableMetadata::new("operator_test_var_23", "equal_same_text", "Stage", true), ScratchVariableMetadata::new("operator_test_var_24", "and_false_false", "Stage", true), ScratchVariableMetadata::new("operator_test_var_25", "or_false_true", "Stage", true), ScratchVariableMetadata::new("operator_test_var_26", "not_false", "Stage", true), ScratchVariableMetadata::new("operator_test_var_27", "length_of_scratch", "Stage", true), ScratchVariableMetadata::new("operator_test_var_28", "square_root_of_9", "Stage", true), ScratchVariableMetadata::new("operator_test_var_29", "sine_of_30_degrees", "Stage", true), ScratchVariableMetadata::new("operator_test_var_30", "cosine_of_60_degrees", "Stage", true), ScratchVariableMetadata::new("operator_test_var_31", "tangent_of_45_degrees", "Stage", true), ScratchVariableMetadata::new("operator_test_var_32", "arcsine_of_0_5", "Stage", true), ScratchVariableMetadata::new("operator_test_var_33", "arccosine_of_0_5", "Stage", true), ScratchVariableMetadata::new("operator_test_var_34", "arctangent_of_1", "Stage", true), ScratchVariableMetadata::new("operator_test_var_35", "natural_log_of_10", "Stage", true), ScratchVariableMetadata::new("operator_test_var_36", "log_base_10_of_10", "Stage", true), ScratchVariableMetadata::new("operator_test_var_37", "e_to_the_power_2", "Stage", true), ScratchVariableMetadata::new("operator_test_var_38", "10_to_the_power_3", "Stage", true), ScratchVariableMetadata::new("warp_math_result_var", "warp_math_result", "Sprite1", false), ScratchVariableMetadata::new("z^xm8m%!CqOL_3#eBIfp", "floor_of_5_5", "Stage", true)], vec![ScratchList::new(vec![(1.0_f64).into(), (4.0_f64).into(), (5.0_f64).into(), (6.0_f64).into(), (7.0_f64).into(), (8.0_f64).into(), (9.0_f64).into(), (10.0_f64).into(), (11.0_f64).into(), (12.0_f64).into(), (13.0_f64).into(), (2.0_f64).into()]), ScratchList::new(vec![("start").into(), (20.0_f64).into()])], vec![ScratchListMetadata::new("]a}Fl@l+VAx!V+d;HXik", "execution order", "Stage", true), ScratchListMetadata::new("operator_list_id", "operator_examples", "Sprite1", false)], vec![false; 2]);
 let scripts = new_scripts();
 let scheduler = match clock { Some(clock) => ScriptScheduler::with_clock(scripts, clock), None => ScriptScheduler::new(scripts) };
     Self { state, scheduler }

@@ -17,14 +17,17 @@
 //! handles variable assignments, increments, and say output while marking
 //! cycles, missing blocks, and unsupported statements in generated code.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde_json::Value;
 
 use crate::parser::{InputValue, ScratchBlock, ScratchTarget, parse_input};
 
 use super::{
-    expressions::{boolean_input, expression},
+    expressions::{
+        LocalValueKind, boolean_input, collect_numeric_local_slots, expression, local_expression,
+        local_to_bool, local_to_number,
+    },
     literals::{field_value, line, quote},
     project::{ListInfo, VariableInfo},
     scripts::ProcedureSignature,
@@ -172,9 +175,10 @@ pub(super) fn generate_resumable_script(
     line(output, 2, "};");
     line(output, 2, "match function {");
     line(output, 3, "0 => match pc {");
+    let mut emitted_blocks = HashSet::new();
     for node in &graph.nodes {
         match node {
-            ScriptNode::Block(id) => generate_resumable_block(
+            ScriptNode::Block(id) => generate_resumable_block_chain(
                 target,
                 id,
                 &graph,
@@ -183,9 +187,19 @@ pub(super) fn generate_resumable_script(
                 &HashMap::new(),
                 procedures,
                 &procedure_entries,
+                &mut emitted_blocks,
                 output,
             ),
-            ScriptNode::LoopBoundary(id) => generate_loop_boundary(target, id, &graph, output),
+            ScriptNode::LoopBoundary(id) => {
+                if target
+                    .blocks
+                    .get(id)
+                    .and_then(|block| numeric_loop_plan(target, block, variables))
+                    .is_none()
+                {
+                    generate_loop_boundary(target, id, &graph, output);
+                }
+            }
         }
     }
     line(output, 4, "_ => return ScriptStatus::Complete,");
@@ -204,9 +218,10 @@ pub(super) fn generate_resumable_script(
             })
             .collect::<HashMap<_, _>>();
         line(output, 3, &format!("{} => match pc {{", procedure.frame_id));
+        let mut emitted_blocks = HashSet::new();
         for node in &procedure_graph.nodes {
             match node {
-                ScriptNode::Block(id) => generate_resumable_block(
+                ScriptNode::Block(id) => generate_resumable_block_chain(
                     target,
                     id,
                     procedure_graph,
@@ -215,10 +230,18 @@ pub(super) fn generate_resumable_script(
                     &argument_accesses,
                     procedures,
                     &procedure_entries,
+                    &mut emitted_blocks,
                     output,
                 ),
                 ScriptNode::LoopBoundary(id) => {
-                    generate_loop_boundary(target, id, procedure_graph, output)
+                    if target
+                        .blocks
+                        .get(id)
+                        .and_then(|block| numeric_loop_plan(target, block, variables))
+                        .is_none()
+                    {
+                        generate_loop_boundary(target, id, procedure_graph, output)
+                    }
                 }
             }
         }
@@ -532,6 +555,422 @@ fn generate_resumable_block(
         }
     }
     line(output, indent, "},");
+}
+
+fn generate_resumable_block_chain(
+    target: &ScratchTarget,
+    id: &str,
+    graph: &ScriptGraph,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    procedures: &[ProcedureSignature],
+    procedure_entries: &HashMap<String, ProcedureEntry>,
+    emitted_blocks: &mut HashSet<String>,
+    output: &mut String,
+) {
+    if emitted_blocks.contains(id) {
+        return;
+    }
+    let Some(block) = target.blocks.get(id) else {
+        generate_resumable_block(
+            target,
+            id,
+            graph,
+            variables,
+            lists,
+            arguments,
+            procedures,
+            procedure_entries,
+            output,
+        );
+        return;
+    };
+    if let Some(plan) = numeric_loop_plan(target, block, variables) {
+        emitted_blocks.insert(id.to_owned());
+        emitted_blocks.extend(plan.body.iter().cloned());
+        generate_native_numeric_loop(target, id, block, graph, variables, &plan, output);
+        return;
+    }
+    if !is_straight_line_block(block) {
+        emitted_blocks.insert(id.to_owned());
+        generate_resumable_block(
+            target,
+            id,
+            graph,
+            variables,
+            lists,
+            arguments,
+            procedures,
+            procedure_entries,
+            output,
+        );
+        return;
+    }
+
+    let start_pc = graph.block_pcs[id];
+    line(output, 4, &format!("{start_pc} => {{"));
+    let mut current = Some(id);
+    let mut last = id;
+    while let Some(current_id) = current {
+        if !emitted_blocks.insert(current_id.to_owned()) {
+            break;
+        }
+        let Some(current_block) = target.blocks.get(current_id) else {
+            break;
+        };
+        generate_resumable_statement(
+            target,
+            current_block,
+            variables,
+            lists,
+            arguments,
+            output,
+            5,
+        );
+        last = current_id;
+        current = current_block.next.as_deref().filter(|next_id| {
+            graph.block_pcs.contains_key(*next_id)
+                && target
+                    .blocks
+                    .get(*next_id)
+                    .is_some_and(is_straight_line_block)
+        });
+    }
+    let last_block = &target.blocks[last];
+    let next_pc = last_block
+        .next
+        .as_ref()
+        .and_then(|next| graph.block_pcs.get(next).copied())
+        .unwrap_or(graph.fallthrough_pcs[last]);
+    line(
+        output,
+        5,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = {};",
+            pc_literal(next_pc)
+        ),
+    );
+    line(output, 5, "continue;");
+    line(output, 4, "},");
+}
+
+struct NumericLoopPlan {
+    body: Vec<String>,
+    local_slots: Vec<usize>,
+    written_slots: Vec<usize>,
+}
+
+fn numeric_loop_plan(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+) -> Option<NumericLoopPlan> {
+    if !matches!(
+        block.opcode.as_str(),
+        "control_repeat" | "control_repeat_until" | "control_while" | "control_forever"
+    ) {
+        return None;
+    }
+    let mut body = Vec::new();
+    let mut current = block
+        .inputs
+        .get("SUBSTACK")
+        .and_then(parse_input)
+        .and_then(|input| match input {
+            InputValue::BlockReference(id) => Some(id),
+            _ => None,
+        });
+    let mut seen = HashSet::new();
+    let mut local_slots = HashSet::new();
+    let mut written_slots = BTreeSet::new();
+    while let Some(id) = current {
+        if !seen.insert(id.to_owned()) {
+            return None;
+        }
+        let statement = target.blocks.get(id)?;
+        if !matches!(
+            statement.opcode.as_str(),
+            "data_setvariableto" | "data_changevariableby"
+        ) {
+            return None;
+        }
+        let variable = variable_field(statement, "VARIABLE", variables)?;
+        if !variable.numeric {
+            return None;
+        }
+        written_slots.insert(variable.slot);
+        local_slots.insert(variable.slot);
+        if !collect_numeric_local_slots(
+            target,
+            statement.inputs.get("VALUE"),
+            variables,
+            &mut local_slots,
+            &mut HashSet::new(),
+        ) {
+            return None;
+        }
+        body.push(id.to_owned());
+        current = statement.next.as_deref();
+    }
+    if body.is_empty() {
+        return None;
+    }
+
+    let loop_input = match block.opcode.as_str() {
+        "control_repeat" => block.inputs.get("TIMES"),
+        "control_repeat_until" | "control_while" => block.inputs.get("CONDITION"),
+        "control_forever" => None,
+        _ => unreachable!(),
+    };
+    if loop_input.is_some()
+        && !collect_numeric_local_slots(
+            target,
+            loop_input,
+            variables,
+            &mut local_slots,
+            &mut HashSet::new(),
+        )
+    {
+        return None;
+    }
+
+    let mut local_slots = local_slots.into_iter().collect::<Vec<_>>();
+    local_slots.sort_unstable();
+    Some(NumericLoopPlan {
+        body,
+        local_slots,
+        written_slots: written_slots.into_iter().collect(),
+    })
+}
+
+fn generate_native_numeric_loop(
+    target: &ScratchTarget,
+    id: &str,
+    block: &ScratchBlock,
+    graph: &ScriptGraph,
+    variables: &HashMap<String, VariableInfo>,
+    plan: &NumericLoopPlan,
+    output: &mut String,
+) {
+    let pc = graph.block_pcs[id];
+    let next_pc = block
+        .next
+        .as_ref()
+        .and_then(|next| graph.block_pcs.get(next).copied())
+        .unwrap_or(graph.fallthrough_pcs[id]);
+    let locals = plan
+        .local_slots
+        .iter()
+        .map(|slot| (*slot, format!("scratch_local_{slot}")))
+        .collect::<HashMap<_, _>>();
+
+    line(output, 4, &format!("{pc} => {{"));
+    for slot in &plan.local_slots {
+        line(
+            output,
+            5,
+            &format!("let mut scratch_local_{slot} = scratch_to_number(state.get({slot}));"),
+        );
+    }
+    line(
+        output,
+        5,
+        "let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);",
+    );
+    line(
+        output,
+        5,
+        "if !scratch_warp_mode { script.warp_budget.reset(); }",
+    );
+
+    if block.opcode == "control_repeat" {
+        generate_native_repeat_loop(
+            target, id, block, graph, variables, plan, &locals, next_pc, output,
+        );
+    } else {
+        line(output, 5, "loop {");
+        if block.opcode != "control_forever" {
+            let condition = local_expression(
+                target,
+                block.inputs.get("CONDITION"),
+                variables,
+                &locals,
+                &mut HashSet::new(),
+            )
+            .expect("numeric loop condition was validated");
+            let condition = local_to_bool(condition);
+            let exit_condition = if block.opcode == "control_repeat_until" {
+                condition
+            } else {
+                format!("!({condition})")
+            };
+            line(output, 6, &format!("if {exit_condition} {{ break; }}"));
+        }
+        generate_native_numeric_body(target, variables, plan, &locals, output, 6);
+        line(
+            output,
+            6,
+            "if !scratch_warp_mode || script.warp_budget.expired(clock) {",
+        );
+        line(
+            output,
+            7,
+            &format!("script.frames.last_mut().unwrap().pc = {pc};"),
+        );
+        generate_local_commits(plan, output, 7);
+        line(output, 7, "return ScriptStatus::Yield;");
+        line(output, 6, "}");
+        line(output, 5, "}");
+        generate_local_commits(plan, output, 5);
+        line(
+            output,
+            5,
+            &format!(
+                "script.frames.last_mut().unwrap().pc = {};",
+                pc_literal(next_pc)
+            ),
+        );
+        line(output, 5, "continue;");
+    }
+    line(output, 4, "},");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_native_repeat_loop(
+    target: &ScratchTarget,
+    id: &str,
+    block: &ScratchBlock,
+    graph: &ScriptGraph,
+    variables: &HashMap<String, VariableInfo>,
+    plan: &NumericLoopPlan,
+    locals: &HashMap<usize, String>,
+    next_pc: usize,
+    output: &mut String,
+) {
+    let pc = graph.block_pcs[id];
+    let slot = graph.repeat_slots[id];
+    let times = local_expression(
+        target,
+        block.inputs.get("TIMES"),
+        variables,
+        locals,
+        &mut HashSet::new(),
+    )
+    .expect("numeric repeat count was validated");
+    let times = local_to_number(times);
+    line(
+        output,
+        5,
+        &format!("let mut repeat_remaining = script.frames.last().unwrap().repeat_counts[{slot}];"),
+    );
+    line(output, 5, "if repeat_remaining == 0 {");
+    line(
+        output,
+        6,
+        &format!("repeat_remaining = scratch_round({times}).max(0.0) as usize;"),
+    );
+    line(
+        output,
+        6,
+        &format!("script.frames.last_mut().unwrap().repeat_counts[{slot}] = repeat_remaining;"),
+    );
+    line(output, 5, "}");
+    line(output, 5, "if repeat_remaining == 0 {");
+    line(
+        output,
+        6,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = {};",
+            pc_literal(next_pc)
+        ),
+    );
+    line(output, 6, "continue;");
+    line(output, 5, "}");
+    line(output, 5, "loop {");
+    generate_native_numeric_body(target, variables, plan, locals, output, 6);
+    line(output, 6, "repeat_remaining -= 1;");
+    line(
+        output,
+        6,
+        &format!("script.frames.last_mut().unwrap().repeat_counts[{slot}] = repeat_remaining;"),
+    );
+    line(
+        output,
+        6,
+        "if !scratch_warp_mode || script.warp_budget.expired(clock) {",
+    );
+    line(
+        output,
+        7,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 {{ {pc} }} else {{ {} }};",
+            pc_literal(next_pc)
+        ),
+    );
+    generate_local_commits(plan, output, 7);
+    line(output, 7, "return ScriptStatus::Yield;");
+    line(output, 6, "}");
+    line(output, 6, "if repeat_remaining == 0 { break; }");
+    line(output, 5, "}");
+    generate_local_commits(plan, output, 5);
+    line(
+        output,
+        5,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = {};",
+            pc_literal(next_pc)
+        ),
+    );
+    line(output, 5, "continue;");
+}
+
+fn generate_native_numeric_body(
+    target: &ScratchTarget,
+    variables: &HashMap<String, VariableInfo>,
+    plan: &NumericLoopPlan,
+    locals: &HashMap<usize, String>,
+    output: &mut String,
+    indent: usize,
+) {
+    for id in &plan.body {
+        let block = &target.blocks[id];
+        let variable = variable_field(block, "VARIABLE", variables)
+            .expect("numeric loop target was validated");
+        let value = local_expression(
+            target,
+            block.inputs.get("VALUE"),
+            variables,
+            locals,
+            &mut HashSet::new(),
+        )
+        .expect("numeric loop expression was validated");
+        let local = &locals[&variable.slot];
+        if block.opcode == "data_setvariableto" {
+            assert_eq!(value.kind, LocalValueKind::Number);
+            line(output, indent, &format!("{local} = {};", value.code));
+        } else {
+            line(
+                output,
+                indent,
+                &format!("{local} = scratch_add({local}, {});", value.code),
+            );
+        }
+    }
+}
+
+fn generate_local_commits(plan: &NumericLoopPlan, output: &mut String, indent: usize) {
+    for slot in &plan.written_slots {
+        line(
+            output,
+            indent,
+            &format!("state.set({slot}, scratch_local_{slot}.into());"),
+        );
+    }
+}
+
+fn is_straight_line_block(block: &ScratchBlock) -> bool {
+    !block.opcode.starts_with("control_") && block.opcode != "procedures_call"
 }
 
 fn generate_loop_boundary(

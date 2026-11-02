@@ -59,10 +59,6 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
             0 => match pc {
                 0 => {
                     state.set_list_visible(1, true);
-                    script.frames.last_mut().unwrap().pc = 1;
-                    continue;
-                },
-                1 => {
                     let scratch_list_item: ScratchValue = ("A").into();
                     state.list_mut(1).add(scratch_list_item);
                     script.frames.last_mut().unwrap().pc = 2;
@@ -94,29 +90,13 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
                     let scratch_list_item: ScratchValue = ("B").into();
                     let scratch_list_index: ScratchValue = (1.0_f64).into();
                     state.list_mut(1).insert(scratch_list_item, scratch_list_index);
-                    script.frames.last_mut().unwrap().pc = 4;
-                    continue;
-                },
-                4 => {
                     let scratch_list_item: ScratchValue = ("X").into();
                     let scratch_list_index: ScratchValue = (2.0_f64).into();
                     state.list_mut(1).replace(scratch_list_index, scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 5;
-                    continue;
-                },
-                5 => {
                     let scratch_list_index: ScratchValue = (3.0_f64).into();
                     state.list_mut(1).delete(scratch_list_index);
-                    script.frames.last_mut().unwrap().pc = 6;
-                    continue;
-                },
-                6 => {
                     let scratch_list_item: ScratchValue = ("sprite-only").into();
                     state.list_mut(0).add(scratch_list_item);
-                    script.frames.last_mut().unwrap().pc = 7;
-                    continue;
-                },
-                7 => {
                     state.set_list_visible(0, false);
                     script.frames.last_mut().unwrap().pc = usize::MAX;
                     continue;
@@ -240,16 +220,8 @@ fn step_green_flag_script_sprite1_4(script: &mut ScriptState, state: &mut Scratc
                 0 => {
                     let scratch_new_value: ScratchValue = (state.list(1).length() as f64).into();
                     state.set(2, scratch_new_value);
-                    script.frames.last_mut().unwrap().pc = 1;
-                    continue;
-                },
-                1 => {
                     let scratch_new_value: ScratchValue = (state.list(1).get(1.0_f64)).clone();
                     state.set(1, scratch_new_value);
-                    script.frames.last_mut().unwrap().pc = 2;
-                    continue;
-                },
-                2 => {
                     let scratch_new_value: ScratchValue = (state.list(1).item_number("seed") as f64).into();
                     state.set(3, scratch_new_value);
                     script.frames.last_mut().unwrap().pc = usize::MAX;

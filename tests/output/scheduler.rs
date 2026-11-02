@@ -33,6 +33,7 @@ impl ScriptState {
 enum GeneratedScript {
     Script1(ScriptState),
     Script2(ScriptState),
+    Script3(ScriptState),
 }
 
 impl ResumableScript for GeneratedScript {
@@ -40,6 +41,7 @@ impl ResumableScript for GeneratedScript {
         match self {
             Self::Script1(script) => step_green_flag_script_sprite1_1(script, state, clock),
             Self::Script2(script) => step_green_flag_script_sprite1_2(script, state, clock),
+            Self::Script3(script) => step_green_flag_script_sprite2_3(script, state, clock),
         }
     }
 }
@@ -109,7 +111,8 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
                     continue;
                 },
                 5 => {
-                    print_value!("shared", state.get(0));
+                    let scratch_list_item: ScratchValue = (state.get(0)).clone();
+                    state.list_mut(0).add(scratch_list_item);
                     script.frames.last_mut().unwrap().pc = usize::MAX;
                     continue;
                 },
@@ -142,7 +145,7 @@ fn step_green_flag_script_sprite1_2(script: &mut ScriptState, state: &mut Scratc
             0 => match pc {
                 0 => {
                     let wait_started = script.frames.last().unwrap().wait_deadlines[0].is_none();
-                    let wait_deadline = if let Some(deadline) = script.frames.last().unwrap().wait_deadlines[0] { deadline } else { let duration_ms = (scratch_to_number(0.005_f64).max(0.0) * 1000.0).ceil() as u64; let deadline = clock.now_millis().saturating_add(duration_ms); script.frames.last_mut().unwrap().wait_deadlines[0] = Some(deadline); deadline };
+                    let wait_deadline = if let Some(deadline) = script.frames.last().unwrap().wait_deadlines[0] { deadline } else { let duration_ms = (scratch_to_number(1.0_f64).max(0.0) * 1000.0).ceil() as u64; let deadline = clock.now_millis().saturating_add(duration_ms); script.frames.last_mut().unwrap().wait_deadlines[0] = Some(deadline); deadline };
                     if wait_started {
                         script.frames.last_mut().unwrap().pc = 0;
                         if script.frames.last().unwrap().warp_mode {
@@ -163,7 +166,7 @@ fn step_green_flag_script_sprite1_2(script: &mut ScriptState, state: &mut Scratc
                     continue;
                 },
                 1 => {
-                    print_value!("shared", state.get(0));
+                    print_value!("say", state.list(0).contents());
                     script.frames.last_mut().unwrap().pc = usize::MAX;
                     continue;
                 },
@@ -185,7 +188,53 @@ fn step_green_flag_script_sprite1_2(script: &mut ScriptState, state: &mut Scratc
 
 fn new_green_flag_script_sprite1_2() -> GeneratedScript { GeneratedScript::Script2(ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 1], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
 
-fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_1(), new_green_flag_script_sprite1_2()] }
+#[allow(dead_code, unused_variables, unused_mut, unused_assignments, unreachable_code)]
+fn step_green_flag_script_sprite2_3(script: &mut ScriptState, state: &mut ScratchState, clock: &dyn Clock) -> ScriptStatus {
+    loop {
+        let (function, pc) = match script.frames.last() {
+            Some(frame) => (frame.function, frame.pc),
+            None => return ScriptStatus::Complete,
+        };
+        match function {
+            0 => match pc {
+                0 => {
+                    let wait_started = script.frames.last().unwrap().wait_deadlines[0].is_none();
+                    let wait_deadline = if let Some(deadline) = script.frames.last().unwrap().wait_deadlines[0] { deadline } else { let duration_ms = (scratch_to_number(0.005_f64).max(0.0) * 1000.0).ceil() as u64; let deadline = clock.now_millis().saturating_add(duration_ms); script.frames.last_mut().unwrap().wait_deadlines[0] = Some(deadline); deadline };
+                    if wait_started {
+                        script.frames.last_mut().unwrap().pc = 0;
+                        if script.frames.last().unwrap().warp_mode {
+                            if script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                            continue;
+                        }
+                        return ScriptStatus::WaitUntil(wait_deadline);
+                    }
+                    if clock.now_millis() < wait_deadline {
+                        if script.frames.last().unwrap().warp_mode {
+                            if script.warp_budget_expired(clock) { return ScriptStatus::Yield; }
+                            continue;
+                        }
+                        return ScriptStatus::WaitUntil(wait_deadline);
+                    }
+                    script.frames.last_mut().unwrap().wait_deadlines[0] = None;
+                    script.frames.last_mut().unwrap().pc = 1;
+                    continue;
+                },
+                1 => {
+                    let scratch_list_item: ScratchValue = (state.get(0)).clone();
+                    state.list_mut(0).add(scratch_list_item);
+                    script.frames.last_mut().unwrap().pc = usize::MAX;
+                    continue;
+                },
+                _ => return ScriptStatus::Complete,
+            },
+            _ => return ScriptStatus::Complete,
+        }
+    }
+}
+
+fn new_green_flag_script_sprite2_3() -> GeneratedScript { GeneratedScript::Script3(ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 1], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+
+fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_1(), new_green_flag_script_sprite1_2(), new_green_flag_script_sprite2_3()] }
 
 #[allow(dead_code)]
 pub struct GeneratedProgram { state: ScratchState, scheduler: ScriptScheduler<GeneratedScript> }
@@ -195,7 +244,7 @@ impl GeneratedProgram {
     pub fn new() -> Self { Self::build(None) }
     pub fn new_with_clock(clock: Box<dyn Clock>) -> Self { Self::build(Some(clock)) }
     fn build(clock: Option<Box<dyn Clock>>) -> Self {
-    let state = ScratchState::with_project_data(vec![(0.0_f64).into()], vec![ScratchVariableMetadata::new("shared-id", "shared", "Stage", true)], vec![], vec![], vec![false; 0]);
+    let state = ScratchState::with_project_data(vec![(0.0_f64).into()], vec![ScratchVariableMetadata::new("shared-id", "shared", "Stage", true)], vec![ScratchList::new(vec![])], vec![ScratchListMetadata::new("^t+pzSlQ3K05?k/~{mBj", "test", "Stage", true)], vec![false; 1]);
 let scripts = new_scripts();
 let scheduler = match clock { Some(clock) => ScriptScheduler::with_clock(scripts, clock), None => ScriptScheduler::new(scripts) };
     Self { state, scheduler }
