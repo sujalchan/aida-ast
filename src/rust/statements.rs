@@ -1344,6 +1344,62 @@ fn generate_resumable_statement(
                 &format!("print_value!({}, {value});", quote(&name)),
             );
         }
+        "control_create_clone_of" => {
+            let option = block
+                .inputs
+                .get("CLONE_OPTION")
+                .and_then(parse_input)
+                .and_then(|input| match input {
+                    InputValue::BlockReference(id) => target
+                        .blocks
+                        .get(id)
+                        .and_then(|menu| menu.fields.get("CLONE_OPTION"))
+                        .and_then(Value::as_array)
+                        .and_then(|field| field.first())
+                        .and_then(Value::as_str),
+                    InputValue::String(value) | InputValue::Number(value) => value.as_str(),
+                    _ => None,
+                })
+                .unwrap_or("");
+            if option == "_myself_" {
+                line(
+                    output,
+                    indent,
+                    "let clone_target = Some(state.current_target());",
+                );
+                line(
+                    output,
+                    indent,
+                    "let clone_source = Some(state.current_instance());",
+                );
+            } else {
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "let clone_target = state.clone_target_for_name({});",
+                        quote(option)
+                    ),
+                );
+                line(
+                    output,
+                    indent,
+                    "let clone_source = clone_target.and_then(|target| state.original_instance(target));",
+                );
+            }
+            line(
+                output,
+                indent,
+                "if let (Some(target), Some(source)) = (clone_target, clone_source) { state.create_clone(source, target, 300); }",
+            );
+        }
+        "control_delete_this_clone" => {
+            line(
+                output,
+                indent,
+                "if state.delete_current_clone() { return ScriptStatus::Complete; }",
+            );
+        }
         "procedures_call" => line(
             output,
             indent,

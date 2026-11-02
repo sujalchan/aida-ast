@@ -36,14 +36,14 @@ pub(super) struct ProcedureSignature {
     pub(super) warp: bool,
 }
 
-// emit a script enum and one step function for every green flag hat.
+// emit a script enum and one step function for each supported event hat.
 pub(super) fn generate_green_flag_functions(
     project: &ScratchProject,
     variables: &HashMap<String, VariableInfo>,
     lists: &HashMap<String, ListInfo>,
     output: &mut String,
 ) {
-    let scripts = green_flag_scripts(project);
+    let scripts = event_scripts(project);
     if scripts.is_empty() {
         output.push_str("enum GeneratedScript {}\n\nimpl ResumableScript for GeneratedScript {\n    fn step(&mut self, _state: &mut ScratchState, _clock: &dyn Clock) -> ScriptStatus { match *self {} }\n}\n\n");
         return;
@@ -56,7 +56,11 @@ pub(super) fn generate_green_flag_functions(
     output.push_str("impl ScriptState {\n    fn warp_budget_expired(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return false; }\n        self.warp_budget.expired(clock)\n    }\n    fn yield_at_safe_point(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return true; }\n        self.warp_budget.expired(clock)\n    }\n}\n\n");
     line(output, 0, "enum GeneratedScript {");
     for script in &scripts {
-        line(output, 1, &format!("{}(ScriptState),", script.variant));
+        line(
+            output,
+            1,
+            &format!("{}(usize, ScriptState),", script.variant),
+        );
     }
     line(output, 0, "}\n");
 
@@ -66,12 +70,20 @@ pub(super) fn generate_green_flag_functions(
             output,
             3,
             &format!(
-                "Self::{}(script) => step_{}(script, state, clock),",
+                "Self::{}(instance, script) => {{ state.set_current_instance(*instance); step_{}(script, state, clock) }},",
                 script.variant, script.function
             ),
         );
     }
-    output.push_str("        }\n    }\n}\n\n");
+    output.push_str("        }\n    }\n    fn target_instance(&self) -> usize { match self {\n");
+    for script in &scripts {
+        line(
+            output,
+            3,
+            &format!("Self::{}(instance, _) => *instance,", script.variant),
+        );
+    }
+    output.push_str("    } }\n}\n\n");
 
     for script in &scripts {
         let procedures = procedure_signatures(script.target);
@@ -88,7 +100,7 @@ pub(super) fn generate_green_flag_functions(
             output,
             0,
             &format!(
-                "fn new_{}() -> GeneratedScript {{ GeneratedScript::{}(ScriptState {{ frames: vec![ProcedureFrame {{ function: 0, pc: {}, repeat_counts: vec![0; {loop_count}], wait_deadlines: vec![None; {wait_count}], arguments: vec![], warp_mode: false }}], warp_budget: WarpBudget::new(500) }}) }}\n",
+                "fn new_{}_for(instance: usize) -> GeneratedScript {{ GeneratedScript::{}(instance, ScriptState {{ frames: vec![ProcedureFrame {{ function: 0, pc: {}, repeat_counts: vec![0; {loop_count}], wait_deadlines: vec![None; {wait_count}], arguments: vec![], warp_mode: false }}], warp_budget: WarpBudget::new(500) }}) }}\n",
                 script.function,
                 script.variant,
                 if start_pc == usize::MAX {
@@ -98,14 +110,34 @@ pub(super) fn generate_green_flag_functions(
                 }
             ),
         );
+        if script.hat.opcode == "event_whenflagclicked" {
+            line(
+                output,
+                0,
+                &format!(
+                    "fn new_{}() -> GeneratedScript {{ new_{}_for({}) }}\n",
+                    script.function, script.function, script.target_index
+                ),
+            );
+        } else {
+            line(
+                output,
+                0,
+                &format!(
+                    "fn new_{}(instance: usize) -> GeneratedScript {{ new_{}_for(instance) }}\n",
+                    script.function, script.function
+                ),
+            );
+        }
     }
 }
 
 // collect green flag hats across targets in stable target and block order.
 pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
-    let scripts = green_flag_scripts(project);
+    let scripts = event_scripts(project);
     let values = scripts
         .iter()
+        .filter(|script| script.hat.opcode == "event_whenflagclicked")
         .map(|script| format!("new_{}()", script.function))
         .collect::<Vec<_>>();
     line(
@@ -116,6 +148,31 @@ pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
             values.join(", ")
         ),
     );
+    let mut clone_targets = Vec::new();
+    for target_index in 0..project.targets.len() {
+        let values = scripts
+            .iter()
+            .filter(|script| {
+                script.target_index == target_index && script.hat.opcode == "control_start_as_clone"
+            })
+            .map(|script| format!("new_{}(instance)", script.function))
+            .collect::<Vec<_>>();
+        if !values.is_empty() {
+            clone_targets.push(format!("{target_index} => vec![{}]", values.join(", ")));
+        }
+    }
+    let clone_arms = if clone_targets.is_empty() {
+        "_ => Vec::new()".to_owned()
+    } else {
+        format!("{}, _ => Vec::new()", clone_targets.join(", "))
+    };
+    line(
+        output,
+        0,
+        &format!(
+            "fn new_clone_scripts(target: usize, instance: usize) -> Vec<GeneratedScript> {{ match target {{ {clone_arms} }} }}\n"
+        ),
+    );
 }
 
 struct GreenFlagScript<'a> {
@@ -123,22 +180,31 @@ struct GreenFlagScript<'a> {
     hat: &'a crate::parser::ScratchBlock,
     variant: String,
     function: String,
+    target_index: usize,
 }
 
-fn green_flag_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
+fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
     let mut scripts = Vec::new();
-    for target in &project.targets {
+    for (target_index, target) in project.targets.iter().enumerate() {
         let target_name = rust_identifier(&target.name).to_ascii_lowercase();
-        for (_, hat) in event_hats(target)
-            .into_iter()
-            .filter(|(_, hat)| hat.opcode == "event_whenflagclicked")
-        {
-            let function = format!("green_flag_script_{target_name}_{}", scripts.len() + 1);
+        for (_, hat) in event_hats(target).into_iter().filter(|(_, hat)| {
+            matches!(
+                hat.opcode.as_str(),
+                "event_whenflagclicked" | "control_start_as_clone"
+            )
+        }) {
+            let function_type = if hat.opcode == "event_whenflagclicked" {
+                "green_flag_script"
+            } else {
+                "clone_start_script"
+            };
+            let function = format!("{function_type}_{target_name}_{}", scripts.len() + 1);
             scripts.push(GreenFlagScript {
                 target,
                 hat,
                 variant: format!("Script{}", scripts.len() + 1),
                 function,
+                target_index,
             });
         }
     }
@@ -211,6 +277,7 @@ fn event_hats(target: &ScratchTarget) -> Vec<(&str, &crate::parser::ScratchBlock
                         | "event_whenstageclicked"
                         | "event_whenkeypressed"
                         | "event_whenbroadcastreceived"
+                        | "control_start_as_clone"
                 )
         })
         .map(|(id, block)| (id.as_str(), block))

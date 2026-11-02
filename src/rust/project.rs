@@ -33,6 +33,7 @@ pub(super) struct VariableInfo {
     pub(super) name: String,
     pub(super) target: String,
     pub(super) is_stage: bool,
+    pub(super) target_index: usize,
     pub(super) numeric: bool,
     pub(super) non_nan: bool,
 }
@@ -43,6 +44,7 @@ pub(super) struct ListInfo {
     pub(super) name: String,
     pub(super) target: String,
     pub(super) is_stage: bool,
+    pub(super) target_index: usize,
 }
 
 /// generate the module header, saved variable declarations, and target scripts.
@@ -79,10 +81,11 @@ pub fn generate(project: &ScratchProject) -> String {
             .expect("every allocated variable has an initializer");
         initial_values[info.slot] = format!("({}).into()", literal(&variable.value));
         variable_metadata[info.slot] = format!(
-            "ScratchVariableMetadata::new({}, {}, {}, {})",
+            "ScratchVariableMetadata::for_target({}, {}, {}, {}, {})",
             quote(id),
             quote(&info.name),
             quote(&info.target),
+            info.target_index,
             info.is_stage
         );
     }
@@ -110,10 +113,11 @@ pub fn generate(project: &ScratchProject) -> String {
                 .join(", ")
         );
         list_metadata[info.slot] = format!(
-            "ScratchListMetadata::new({}, {}, {}, {})",
+            "ScratchListMetadata::for_target({}, {}, {}, {}, {})",
             quote(id),
             quote(&info.name),
             quote(&info.target),
+            info.target_index,
             info.is_stage
         );
     }
@@ -121,7 +125,7 @@ pub fn generate(project: &ScratchProject) -> String {
         &mut output,
         1,
         &format!(
-            "let state = ScratchState::with_project_data(vec![{}], vec![{}], vec![{}], vec![{}], vec![false; {}]);",
+            "let mut state = ScratchState::with_project_data(vec![{}], vec![{}], vec![{}], vec![{}], vec![false; {}]);",
             initial_values.join(", "),
             variable_metadata.join(", "),
             initial_lists.join(", "),
@@ -130,18 +134,31 @@ pub fn generate(project: &ScratchProject) -> String {
         ),
     );
 
+    for (target_index, target) in project.targets.iter().enumerate() {
+        line(
+            &mut output,
+            1,
+            &format!(
+                "state.register_target({target_index}, {}, {});",
+                quote(&target.name),
+                target.is_stage
+            ),
+        );
+    }
+
     output.push_str("let scripts = new_scripts();\nlet scheduler = match clock { Some(clock) => ScriptScheduler::with_clock(scripts, clock), None => ScriptScheduler::new(scripts) };\n");
     output.push_str("    Self { state, scheduler }\n    }\n\n");
-    output
-        .push_str("    pub fn step(&mut self) -> bool { self.scheduler.step(&mut self.state) }\n");
-    output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { self.scheduler.advance(&mut self.state) }\n");
+    output.push_str(
+        "    pub fn step(&mut self) -> bool { self.advance() == SchedulerStatus::Progressed }\n",
+    );
+    output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state); let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } } status }\n");
     output.push_str("    pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }\n");
-    output.push_str("    pub fn restart(&mut self) { self.scheduler.restart(new_scripts()); }\n");
+    output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }\n");
     output.push_str(
         "    pub fn is_complete(&self) -> bool { self.scheduler.active_scripts() == 0 }\n",
     );
     output.push_str("    pub fn state(&self) -> &ScratchState { &self.state }\n");
-    output.push_str("    pub fn run_until_complete(&mut self) { self.scheduler.run_until_complete(&mut self.state); }\n}\n\n");
+    output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }\n}\n\n");
     output.push_str("pub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
     output
 }
@@ -158,6 +175,13 @@ fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo>
                 name: variable.name.clone(),
                 target: target.name.clone(),
                 is_stage: target.is_stage,
+                target_index: project
+                    .targets
+                    .iter()
+                    .position(|candidate| {
+                        candidate.name == target.name && candidate.is_stage == target.is_stage
+                    })
+                    .unwrap_or(0),
                 numeric: numeric_variables.contains(id),
                 non_nan: non_nan_variables.contains(id),
             });
@@ -165,6 +189,11 @@ fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo>
                 info.name = variable.name.clone();
                 info.target = target.name.clone();
                 info.is_stage = true;
+                info.target_index = project
+                    .targets
+                    .iter()
+                    .position(|candidate| candidate.is_stage)
+                    .unwrap_or(0);
             }
         }
     }
@@ -372,11 +401,23 @@ fn allocate_lists(project: &ScratchProject) -> HashMap<String, ListInfo> {
                 name: list.name.clone(),
                 target: target.name.clone(),
                 is_stage: target.is_stage,
+                target_index: project
+                    .targets
+                    .iter()
+                    .position(|candidate| {
+                        candidate.name == target.name && candidate.is_stage == target.is_stage
+                    })
+                    .unwrap_or(0),
             });
             if target.is_stage {
                 info.name = list.name.clone();
                 info.target = target.name.clone();
                 info.is_stage = true;
+                info.target_index = project
+                    .targets
+                    .iter()
+                    .position(|candidate| candidate.is_stage)
+                    .unwrap_or(0);
             }
         }
     }

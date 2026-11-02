@@ -28,6 +28,23 @@ mod tests {
     use crate::parser::parse_project;
 
     #[test]
+    fn clone_fixture_lowers_clone_creation_and_clone_start_hats() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/clone-with-variables.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("state.create_clone(source, target, 300);"));
+        assert!(output.contains("fn new_clone_scripts(target: usize, instance: usize)"));
+        assert!(output.contains("new_clone_start_script_sprite1_2(instance)"));
+        assert!(output.contains("new_clone_start_script_sprite1_5(instance)"));
+        assert!(output.contains("ScratchVariableMetadata::for_target(\"`jEk@4|i[#Fk?(8x)AV.-my variable\", \"my variable\", \"Stage\", 0, true)"));
+    }
+
+    #[test]
     fn lowers_dynamic_math_with_scratch_conversion_and_keeps_literal_types() {
         let project = parse_project(
             &json!({
@@ -638,10 +655,10 @@ mod tests {
 
         let output = generate(&project);
         assert!(output.contains(
-            "ScratchVariableMetadata::new(\"stage_score_id\", \"score\", \"Stage\", true)"
+            "ScratchVariableMetadata::for_target(\"stage_score_id\", \"score\", \"Stage\", 0, true)"
         ));
         assert!(output.contains(
-            "ScratchVariableMetadata::new(\"sprite_score_id\", \"score\", \"Sprite1\", false)"
+            "ScratchVariableMetadata::for_target(\"sprite_score_id\", \"score\", \"Sprite1\", 1, false)"
         ));
         assert!(output.contains("state.set(0, scratch_new_value);"));
         assert!(output.contains("state.set(1, scratch_new_value);"));

@@ -31,21 +31,27 @@ impl ScriptState {
 }
 
 enum GeneratedScript {
-    Script1(ScriptState),
-    Script2(ScriptState),
-    Script3(ScriptState),
-    Script4(ScriptState),
+    Script1(usize, ScriptState),
+    Script2(usize, ScriptState),
+    Script3(usize, ScriptState),
+    Script4(usize, ScriptState),
 }
 
 impl ResumableScript for GeneratedScript {
     fn step(&mut self, state: &mut ScratchState, clock: &dyn Clock) -> ScriptStatus {
         match self {
-            Self::Script1(script) => step_green_flag_script_sprite1_1(script, state, clock),
-            Self::Script2(script) => step_green_flag_script_sprite1_2(script, state, clock),
-            Self::Script3(script) => step_green_flag_script_sprite1_3(script, state, clock),
-            Self::Script4(script) => step_green_flag_script_sprite1_4(script, state, clock),
+            Self::Script1(instance, script) => { state.set_current_instance(*instance); step_green_flag_script_sprite1_1(script, state, clock) },
+            Self::Script2(instance, script) => { state.set_current_instance(*instance); step_green_flag_script_sprite1_2(script, state, clock) },
+            Self::Script3(instance, script) => { state.set_current_instance(*instance); step_green_flag_script_sprite1_3(script, state, clock) },
+            Self::Script4(instance, script) => { state.set_current_instance(*instance); step_green_flag_script_sprite1_4(script, state, clock) },
         }
     }
+    fn target_instance(&self) -> usize { match self {
+            Self::Script1(instance, _) => *instance,
+            Self::Script2(instance, _) => *instance,
+            Self::Script3(instance, _) => *instance,
+            Self::Script4(instance, _) => *instance,
+    } }
 }
 
 #[allow(dead_code, unused_variables, unused_mut, unused_assignments, unreachable_code)]
@@ -108,7 +114,9 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
     }
 }
 
-fn new_green_flag_script_sprite1_1() -> GeneratedScript { GeneratedScript::Script1(ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 1], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+fn new_green_flag_script_sprite1_1_for(instance: usize) -> GeneratedScript { GeneratedScript::Script1(instance, ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 1], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+
+fn new_green_flag_script_sprite1_1() -> GeneratedScript { new_green_flag_script_sprite1_1_for(1) }
 
 #[allow(dead_code, unused_variables, unused_mut, unused_assignments, unreachable_code)]
 fn step_green_flag_script_sprite1_2(script: &mut ScriptState, state: &mut ScratchState, clock: &dyn Clock) -> ScriptStatus {
@@ -154,7 +162,9 @@ fn step_green_flag_script_sprite1_2(script: &mut ScriptState, state: &mut Scratc
     }
 }
 
-fn new_green_flag_script_sprite1_2() -> GeneratedScript { GeneratedScript::Script2(ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 1], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+fn new_green_flag_script_sprite1_2_for(instance: usize) -> GeneratedScript { GeneratedScript::Script2(instance, ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 1], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+
+fn new_green_flag_script_sprite1_2() -> GeneratedScript { new_green_flag_script_sprite1_2_for(1) }
 
 #[allow(dead_code, unused_variables, unused_mut, unused_assignments, unreachable_code)]
 fn step_green_flag_script_sprite1_3(script: &mut ScriptState, state: &mut ScratchState, clock: &dyn Clock) -> ScriptStatus {
@@ -206,7 +216,9 @@ fn step_green_flag_script_sprite1_3(script: &mut ScriptState, state: &mut Scratc
     }
 }
 
-fn new_green_flag_script_sprite1_3() -> GeneratedScript { GeneratedScript::Script3(ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 1], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+fn new_green_flag_script_sprite1_3_for(instance: usize) -> GeneratedScript { GeneratedScript::Script3(instance, ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 1], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+
+fn new_green_flag_script_sprite1_3() -> GeneratedScript { new_green_flag_script_sprite1_3_for(1) }
 
 #[allow(dead_code, unused_variables, unused_mut, unused_assignments, unreachable_code)]
 fn step_green_flag_script_sprite1_4(script: &mut ScriptState, state: &mut ScratchState, clock: &dyn Clock) -> ScriptStatus {
@@ -234,9 +246,13 @@ fn step_green_flag_script_sprite1_4(script: &mut ScriptState, state: &mut Scratc
     }
 }
 
-fn new_green_flag_script_sprite1_4() -> GeneratedScript { GeneratedScript::Script4(ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 0], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+fn new_green_flag_script_sprite1_4_for(instance: usize) -> GeneratedScript { GeneratedScript::Script4(instance, ScriptState { frames: vec![ProcedureFrame { function: 0, pc: 0, repeat_counts: vec![0; 0], wait_deadlines: vec![None; 0], arguments: vec![], warp_mode: false }], warp_budget: WarpBudget::new(500) }) }
+
+fn new_green_flag_script_sprite1_4() -> GeneratedScript { new_green_flag_script_sprite1_4_for(1) }
 
 fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_1(), new_green_flag_script_sprite1_2(), new_green_flag_script_sprite1_3(), new_green_flag_script_sprite1_4()] }
+
+fn new_clone_scripts(target: usize, instance: usize) -> Vec<GeneratedScript> { match target { _ => Vec::new() } }
 
 #[allow(dead_code)]
 pub struct GeneratedProgram { state: ScratchState, scheduler: ScriptScheduler<GeneratedScript> }
@@ -246,19 +262,21 @@ impl GeneratedProgram {
     pub fn new() -> Self { Self::build(None) }
     pub fn new_with_clock(clock: Box<dyn Clock>) -> Self { Self::build(Some(clock)) }
     fn build(clock: Option<Box<dyn Clock>>) -> Self {
-    let state = ScratchState::with_project_data(vec![("").into(), ("").into(), (0.0_f64).into(), (0.0_f64).into(), (false).into()], vec![ScratchVariableMetadata::new("contents-id", "contents", "Stage", true), ScratchVariableMetadata::new("item-id", "first item", "Stage", true), ScratchVariableMetadata::new("length-id", "length", "Stage", true), ScratchVariableMetadata::new("number-id", "item number", "Stage", true), ScratchVariableMetadata::new("observed-id", "saw A", "Stage", true)], vec![ScratchList::new(vec![(1.0_f64).into(), ("1").into(), (true).into()]), ScratchList::new(vec![("seed").into()])], vec![ScratchListMetadata::new("sprite-list", "items", "Sprite1", false), ScratchListMetadata::new("stage-list", "items", "Stage", true)], vec![false; 2]);
+    let mut state = ScratchState::with_project_data(vec![("").into(), ("").into(), (0.0_f64).into(), (0.0_f64).into(), (false).into()], vec![ScratchVariableMetadata::for_target("contents-id", "contents", "Stage", 0, true), ScratchVariableMetadata::for_target("item-id", "first item", "Stage", 0, true), ScratchVariableMetadata::for_target("length-id", "length", "Stage", 0, true), ScratchVariableMetadata::for_target("number-id", "item number", "Stage", 0, true), ScratchVariableMetadata::for_target("observed-id", "saw A", "Stage", 0, true)], vec![ScratchList::new(vec![(1.0_f64).into(), ("1").into(), (true).into()]), ScratchList::new(vec![("seed").into()])], vec![ScratchListMetadata::for_target("sprite-list", "items", "Sprite1", 1, false), ScratchListMetadata::for_target("stage-list", "items", "Stage", 0, true)], vec![false; 2]);
+    state.register_target(0, "Stage", true);
+    state.register_target(1, "Sprite1", false);
 let scripts = new_scripts();
 let scheduler = match clock { Some(clock) => ScriptScheduler::with_clock(scripts, clock), None => ScriptScheduler::new(scripts) };
     Self { state, scheduler }
     }
 
-    pub fn step(&mut self) -> bool { self.scheduler.step(&mut self.state) }
-    pub fn advance(&mut self) -> SchedulerStatus { self.scheduler.advance(&mut self.state) }
+    pub fn step(&mut self) -> bool { self.advance() == SchedulerStatus::Progressed }
+    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state); let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } } status }
     pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }
-    pub fn restart(&mut self) { self.scheduler.restart(new_scripts()); }
+    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }
     pub fn is_complete(&self) -> bool { self.scheduler.active_scripts() == 0 }
     pub fn state(&self) -> &ScratchState { &self.state }
-    pub fn run_until_complete(&mut self) { self.scheduler.run_until_complete(&mut self.state); }
+    pub fn run_until_complete(&mut self) { loop { match self.advance() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }
 }
 
 pub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }
