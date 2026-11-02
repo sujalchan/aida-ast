@@ -88,11 +88,11 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
                     let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
                     if !scratch_warp_mode { script.warp_budget.reset(); }
                     loop {
-                        if scratch_equals(scratch_local_3, 0.0_f64) { break; }
+                        if scratch_local_3 == 0.0_f64 { break; }
                         scratch_local_4 = scratch_add(scratch_local_4, scratch_divide(1.0_f64, scratch_multiply(scratch_local_2, scratch_local_2)));
                         scratch_local_0 = (scratch_to_number(scratch_multiply(6.0_f64, scratch_local_4))).sqrt();
-                        scratch_local_1 = scratch_add(scratch_local_1, scratch_multiply(1.0_f64, true));
-                        scratch_local_2 = scratch_add(scratch_local_2, 1.0_f64);
+                        scratch_local_1 += 1.0_f64;
+                        scratch_local_2 += 1.0_f64;
                         if !scratch_warp_mode || script.warp_budget.expired(clock) {
                             script.frames.last_mut().unwrap().pc = 0;
                             state.set(0, scratch_local_0.into());

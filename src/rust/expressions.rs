@@ -235,6 +235,69 @@ fn identical_literal_inputs(block: &ScratchBlock) -> bool {
     }
 }
 
+// evaluate constant arithmetic using scratch's numeric input conversion.
+pub(super) fn constant_numeric_input(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    active: &mut HashSet<String>,
+) -> Option<f64> {
+    let normalize = |value: f64| if value.is_nan() { 0.0 } else { value };
+    match input.and_then(parse_input)? {
+        InputValue::Number(value) => Some(normalize(
+            value
+                .as_f64()
+                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                .unwrap_or(0.0),
+        )),
+        InputValue::String(value) => Some(normalize(
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .and_then(|text| text.parse().ok())
+                .unwrap_or(0.0),
+        )),
+        InputValue::BlockReference(id) => {
+            if !active.insert(id.to_owned()) {
+                return None;
+            }
+            let block = target.blocks.get(id)?;
+            let result = if block.opcode == "operator_equals" && identical_literal_inputs(block) {
+                Some(1.0)
+            } else {
+                let names = match block.opcode.as_str() {
+                    "operator_add" | "operator_subtract" => ("NUM1", "NUM2"),
+                    "operator_multiply" | "operator_divide" => ("NUM1", "NUM2"),
+                    _ => {
+                        active.remove(id);
+                        return None;
+                    }
+                };
+                let left = normalize(constant_numeric_input(
+                    target,
+                    block.inputs.get(names.0),
+                    active,
+                )?);
+                let right = normalize(constant_numeric_input(
+                    target,
+                    block.inputs.get(names.1),
+                    active,
+                )?);
+                Some(match block.opcode.as_str() {
+                    "operator_add" => left + right,
+                    "operator_subtract" => left - right,
+                    "operator_multiply" => left * right,
+                    "operator_divide" => left / right,
+                    _ => unreachable!(),
+                })
+            };
+            active.remove(id);
+            result
+        }
+        _ => None,
+    }
+}
+
 // collect variables that a native numeric loop can safely keep in f64 locals.
 pub(super) fn collect_numeric_local_slots(
     target: &ScratchTarget,
@@ -358,11 +421,33 @@ fn local_block_expression(
             kind: LocalValueKind::Number,
         })
     };
-    let comparison = |function: &str, left: &str, right: &str, active: &mut HashSet<String>| {
-        let left = input(left, active)?;
-        let right = input(right, active)?;
+    let comparison = |function: &str,
+                      operator: &str,
+                      left_name: &str,
+                      right_name: &str,
+                      active: &mut HashSet<String>| {
+        let left = input(left_name, active)?;
+        let right = input(right_name, active)?;
+        let native = left.kind == LocalValueKind::Number
+            && right.kind == LocalValueKind::Number
+            && local_input_is_non_nan_number(
+                target,
+                block.inputs.get(left_name),
+                variables,
+                &mut HashSet::new(),
+            )
+            && local_input_is_non_nan_number(
+                target,
+                block.inputs.get(right_name),
+                variables,
+                &mut HashSet::new(),
+            );
         Some(LocalExpression {
-            code: format!("{function}({}, {})", left.code, right.code),
+            code: if native {
+                format!("{} {operator} {}", left.code, right.code)
+            } else {
+                format!("{function}({}, {})", left.code, right.code)
+            },
             kind: LocalValueKind::Boolean,
         })
     };
@@ -377,9 +462,9 @@ fn local_block_expression(
             code: "true".to_owned(),
             kind: LocalValueKind::Boolean,
         }),
-        "operator_equals" => comparison("scratch_equals", "OPERAND1", "OPERAND2", active),
-        "operator_gt" => comparison("scratch_greater_than", "OPERAND1", "OPERAND2", active),
-        "operator_lt" => comparison("scratch_less_than", "OPERAND1", "OPERAND2", active),
+        "operator_equals" => comparison("scratch_equals", "==", "OPERAND1", "OPERAND2", active),
+        "operator_gt" => comparison("scratch_greater_than", ">", "OPERAND1", "OPERAND2", active),
+        "operator_lt" => comparison("scratch_less_than", "<", "OPERAND1", "OPERAND2", active),
         "operator_and" | "operator_or" => {
             let left = local_to_bool(input("OPERAND1", active)?);
             let right = local_to_bool(input("OPERAND2", active)?);
@@ -447,6 +532,51 @@ fn local_block_expression(
             kind: LocalValueKind::Text,
         }),
         _ => None,
+    }
+}
+
+fn local_input_is_non_nan_number(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, VariableInfo>,
+    active: &mut HashSet<String>,
+) -> bool {
+    match input.and_then(parse_input) {
+        Some(InputValue::Number(value)) => value
+            .as_f64()
+            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+            .is_some_and(|value: f64| !value.is_nan()),
+        Some(InputValue::VariableReference(reference)) => variables
+            .get(reference.id)
+            .is_some_and(|variable| variable.non_nan),
+        Some(InputValue::BlockReference(id)) => {
+            if !active.insert(id.to_owned()) {
+                return false;
+            }
+            let result = target.blocks.get(id).is_some_and(|block| {
+                if block.opcode == "data_variable" {
+                    return variable_field(block, "VARIABLE", variables)
+                        .is_some_and(|variable| variable.non_nan);
+                }
+                matches!(
+                    block.opcode.as_str(),
+                    "math_number"
+                        | "math_integer"
+                        | "math_whole_number"
+                        | "math_positive_number"
+                        | "math_angle"
+                ) && field_value(block, "NUM")
+                    .and_then(|value| {
+                        value
+                            .as_f64()
+                            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                    })
+                    .is_some_and(|value: f64| !value.is_nan())
+            });
+            active.remove(id);
+            result
+        }
+        _ => false,
     }
 }
 

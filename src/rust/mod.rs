@@ -143,9 +143,7 @@ mod tests {
 
         let output = generate(&project);
         assert!(output.contains("let mut scratch_local_0 = scratch_to_number(state.get(0));"));
-        assert!(output.contains(
-            "scratch_local_0 = scratch_add(scratch_local_0, scratch_multiply(1.0_f64, true));"
-        ));
+        assert!(output.contains("scratch_local_0 += 1.0_f64;"));
         assert!(!output.contains("scratch_equals(\"same\", \"same\")"));
         let safeguard = output
             .find("if !scratch_warp_mode || script.warp_budget.expired(clock)")
@@ -159,6 +157,66 @@ mod tests {
             .unwrap()
             + commit;
         assert!(safeguard < commit && commit < yielded);
+    }
+
+    #[test]
+    fn numeric_loops_specialize_non_nan_comparisons_and_literal_increments() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1",
+                    "isStage": false,
+                    "variables": {
+                        "count_id": ["count", 0],
+                        "running_id": ["running", 1]
+                    },
+                    "blocks": {
+                        "hat": {"opcode": "event_whenflagclicked", "next": "loop", "topLevel": true, "inputs": {}, "fields": {}},
+                        "loop": {"opcode": "control_repeat_until", "next": null, "inputs": {"CONDITION": [2, "equal"], "SUBSTACK": [2, "change"]}, "fields": {}},
+                        "equal": {"opcode": "operator_equals", "next": null, "inputs": {"OPERAND1": [3, [12, "running", "running_id"], [4, "0"]], "OPERAND2": [1, [4, "0"]]}, "fields": {}},
+                        "change": {"opcode": "data_changevariableby", "next": null, "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["count", "count_id"]}}
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let output = generate(&project);
+        assert!(output.contains("if scratch_local_1 == 0.0_f64 { break; }"));
+        assert!(output.contains("scratch_local_0 += 1.0_f64;"));
+        assert!(!output.contains("scratch_equals(scratch_local_1, 0.0_f64)"));
+        assert!(!output.contains("scratch_add(scratch_local_0, 1.0_f64)"));
+    }
+
+    #[test]
+    fn numeric_loops_keep_dynamic_scratch_semantics() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1",
+                    "isStage": false,
+                    "variables": {
+                        "count_id": ["count", 0],
+                        "change_id": ["change", 1]
+                    },
+                    "blocks": {
+                        "hat": {"opcode": "event_whenflagclicked", "next": "set", "topLevel": true, "inputs": {}, "fields": {}},
+                        "set": {"opcode": "data_setvariableto", "next": "loop", "inputs": {"VALUE": [3, "divide", [4, "0"]]}, "fields": {"VARIABLE": ["count", "count_id"]}},
+                        "divide": {"opcode": "operator_divide", "next": null, "inputs": {"NUM1": [1, [4, "0"]], "NUM2": [1, [4, "0"]]}, "fields": {}},
+                        "loop": {"opcode": "control_repeat_until", "next": null, "inputs": {"CONDITION": [2, "equal"], "SUBSTACK": [2, "change"]}, "fields": {}},
+                        "equal": {"opcode": "operator_equals", "next": null, "inputs": {"OPERAND1": [3, [12, "count", "count_id"], [4, "0"]], "OPERAND2": [1, [4, "0"]]}, "fields": {}},
+                        "change": {"opcode": "data_changevariableby", "next": null, "inputs": {"VALUE": [3, [12, "change", "change_id"], [4, "0"]]}, "fields": {"VARIABLE": ["count", "count_id"]}}
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let output = generate(&project);
+        assert!(output.contains("scratch_equals(scratch_local_1, 0.0_f64)"));
+        assert!(output.contains("scratch_add(scratch_local_1, scratch_local_0)"));
     }
 
     #[test]

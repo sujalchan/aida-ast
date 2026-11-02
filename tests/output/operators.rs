@@ -194,7 +194,7 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
                     }
                     loop {
                         scratch_local_22 = scratch_add(scratch_local_22, scratch_multiply(scratch_local_20, scratch_local_20));
-                        scratch_local_20 = scratch_add(scratch_local_20, 1.0_f64);
+                        scratch_local_20 += 1.0_f64;
                         repeat_remaining -= 1;
                         script.frames.last_mut().unwrap().repeat_counts[0] = repeat_remaining;
                         if !scratch_warp_mode || script.warp_budget.expired(clock) {
@@ -260,9 +260,9 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
                     let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
                     if !scratch_warp_mode { script.warp_budget.reset(); }
                     loop {
-                        if scratch_greater_than(scratch_local_23, 3.0_f64) { break; }
+                        if scratch_local_23 > 3.0_f64 { break; }
                         scratch_local_24 = scratch_add(scratch_local_24, scratch_local_23);
-                        scratch_local_23 = scratch_add(scratch_local_23, 1.0_f64);
+                        scratch_local_23 += 1.0_f64;
                         if !scratch_warp_mode || script.warp_budget.expired(clock) {
                             script.frames.last_mut().unwrap().pc = 92;
                             state.set(23, scratch_local_23.into());
@@ -290,9 +290,9 @@ fn step_green_flag_script_sprite1_1(script: &mut ScriptState, state: &mut Scratc
                     let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
                     if !scratch_warp_mode { script.warp_budget.reset(); }
                     loop {
-                        if !(scratch_greater_than(scratch_local_25, 0.0_f64)) { break; }
+                        if !(scratch_local_25 > 0.0_f64) { break; }
                         scratch_local_26 = scratch_multiply(scratch_local_26, scratch_local_25);
-                        scratch_local_25 = scratch_add(scratch_local_25, -1.0_f64);
+                        scratch_local_25 += -1.0_f64;
                         if !scratch_warp_mode || script.warp_budget.expired(clock) {
                             script.frames.last_mut().unwrap().pc = 99;
                             state.set(25, scratch_local_25.into());

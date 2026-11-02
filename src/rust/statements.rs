@@ -25,8 +25,8 @@ use crate::parser::{InputValue, ScratchBlock, ScratchTarget, parse_input};
 
 use super::{
     expressions::{
-        LocalValueKind, boolean_input, collect_numeric_local_slots, expression, local_expression,
-        local_to_bool, local_to_number,
+        LocalValueKind, boolean_input, collect_numeric_local_slots, constant_numeric_input,
+        expression, local_expression, local_to_bool, local_to_number,
     },
     literals::{field_value, line, quote},
     project::{ListInfo, VariableInfo},
@@ -949,6 +949,15 @@ fn generate_native_numeric_body(
         if block.opcode == "data_setvariableto" {
             assert_eq!(value.kind, LocalValueKind::Number);
             line(output, indent, &format!("{local} = {};", value.code));
+        } else if let Some(constant) = variable
+            .non_nan
+            .then(|| {
+                constant_numeric_input(target, block.inputs.get("VALUE"), &mut HashSet::new())
+                    .filter(|value| value.is_finite())
+            })
+            .flatten()
+        {
+            line(output, indent, &format!("{local} += {constant:?}_f64;"));
         } else {
             line(
                 output,

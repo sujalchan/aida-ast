@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::parser::{InputValue, ScratchProject, ScratchTarget, parse_input};
 
 use super::{
+    expressions::constant_numeric_input,
     literals::{line, literal, quote},
     scripts::{generate_green_flag_functions, generate_scripts},
 };
@@ -33,6 +34,7 @@ pub(super) struct VariableInfo {
     pub(super) target: String,
     pub(super) is_stage: bool,
     pub(super) numeric: bool,
+    pub(super) non_nan: bool,
 }
 
 #[derive(Clone)]
@@ -147,6 +149,7 @@ pub fn generate(project: &ScratchProject) -> String {
 // assign each Scratch variable ID a stable shared-state slot.
 fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo> {
     let numeric_variables = numeric_variables(project);
+    let non_nan_variables = non_nan_variables(project);
     let mut entries = BTreeMap::new();
     for target in &project.targets {
         for (id, variable) in &target.variables {
@@ -156,6 +159,7 @@ fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo>
                 target: target.name.clone(),
                 is_stage: target.is_stage,
                 numeric: numeric_variables.contains(id),
+                non_nan: non_nan_variables.contains(id),
             });
             if target.is_stage {
                 info.name = variable.name.clone();
@@ -170,6 +174,109 @@ fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo>
         output.insert(id, info);
     }
     output
+}
+
+// prove numeric variables non-nan when every write preserves that property.
+fn non_nan_variables(project: &ScratchProject) -> HashSet<String> {
+    let mut non_nan = project
+        .targets
+        .iter()
+        .flat_map(|target| &target.variables)
+        .filter(|(_, variable)| variable.value.as_f64().is_some_and(|value| !value.is_nan()))
+        .map(|(id, _)| id.clone())
+        .collect::<HashSet<_>>();
+
+    loop {
+        let previous = non_nan.clone();
+        for target in &project.targets {
+            for block in target.blocks.values() {
+                if !matches!(
+                    block.opcode.as_str(),
+                    "data_setvariableto" | "data_changevariableby"
+                ) {
+                    continue;
+                }
+                let Some(id) = block
+                    .fields
+                    .get("VARIABLE")
+                    .and_then(|field| field.as_array())
+                    .and_then(|field| field.get(1))
+                    .and_then(|id| id.as_str())
+                else {
+                    continue;
+                };
+                let preserves_non_nan = if block.opcode == "data_setvariableto" {
+                    input_is_non_nan_number(
+                        target,
+                        block.inputs.get("VALUE"),
+                        &previous,
+                        &mut HashSet::new(),
+                    )
+                } else {
+                    constant_numeric_input(target, block.inputs.get("VALUE"), &mut HashSet::new())
+                        .is_some_and(f64::is_finite)
+                };
+                if !preserves_non_nan {
+                    non_nan.remove(id);
+                }
+            }
+        }
+        if non_nan == previous {
+            return non_nan;
+        }
+    }
+}
+
+fn input_is_non_nan_number(
+    target: &ScratchTarget,
+    input: Option<&serde_json::Value>,
+    non_nan: &HashSet<String>,
+    active: &mut HashSet<String>,
+) -> bool {
+    match input.and_then(parse_input) {
+        Some(InputValue::Number(value)) => value
+            .as_f64()
+            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+            .is_some_and(|value: f64| !value.is_nan()),
+        Some(InputValue::VariableReference(reference)) => non_nan.contains(reference.id),
+        Some(InputValue::BlockReference(id)) => {
+            if !active.insert(id.to_owned()) {
+                return false;
+            }
+            let result = target.blocks.get(id).is_some_and(|block| {
+                if block.opcode == "data_variable" {
+                    return block
+                        .fields
+                        .get("VARIABLE")
+                        .and_then(|field| field.as_array())
+                        .and_then(|field| field.get(1))
+                        .and_then(|id| id.as_str())
+                        .is_some_and(|id| non_nan.contains(id));
+                }
+                matches!(
+                    block.opcode.as_str(),
+                    "math_number"
+                        | "math_integer"
+                        | "math_whole_number"
+                        | "math_positive_number"
+                        | "math_angle"
+                ) && block
+                    .fields
+                    .get("NUM")
+                    .and_then(|field| field.as_array())
+                    .and_then(|field| field.first())
+                    .and_then(|value| {
+                        value
+                            .as_f64()
+                            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                    })
+                    .is_some_and(|value: f64| !value.is_nan())
+            });
+            active.remove(id);
+            result
+        }
+        _ => false,
+    }
 }
 
 // prove variables numeric only when their saved value and every assignment are numeric.

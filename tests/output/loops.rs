@@ -67,7 +67,7 @@ fn step_green_flag_script_stage_1(script: &mut ScriptState, state: &mut ScratchS
                         continue;
                     }
                     loop {
-                        scratch_local_2 = scratch_add(scratch_local_2, 100.0_f64);
+                        scratch_local_2 += 100.0_f64;
                         repeat_remaining -= 1;
                         script.frames.last_mut().unwrap().repeat_counts[0] = repeat_remaining;
                         if !scratch_warp_mode || script.warp_budget.expired(clock) {
@@ -113,7 +113,7 @@ fn step_green_flag_script_stage_1(script: &mut ScriptState, state: &mut ScratchS
                         continue;
                     }
                     loop {
-                        scratch_local_2 = scratch_add(scratch_local_2, 1.0_f64);
+                        scratch_local_2 += 1.0_f64;
                         repeat_remaining -= 1;
                         script.frames.last_mut().unwrap().repeat_counts[2] = repeat_remaining;
                         if !scratch_warp_mode || script.warp_budget.expired(clock) {
@@ -196,7 +196,7 @@ fn step_green_flag_script_stage_2(script: &mut ScriptState, state: &mut ScratchS
                     let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);
                     if !scratch_warp_mode { script.warp_budget.reset(); }
                     loop {
-                        scratch_local_2 = scratch_add(scratch_local_2, 1.0_f64);
+                        scratch_local_2 += 1.0_f64;
                         if !scratch_warp_mode || script.warp_budget.expired(clock) {
                             script.frames.last_mut().unwrap().pc = 2;
                             state.set(2, scratch_local_2.into());

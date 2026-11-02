@@ -1,0 +1,2 @@
+say: "30"
+stopped after 100 scheduler ticks (tick limit reached)
