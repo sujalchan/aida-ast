@@ -108,16 +108,21 @@ impl<'a> TargetGenerator<'a> {
                     ),
             )
         };
-        let mut codes: Vec<_> = target
+        let mut procedure_codes: Vec<_> = target
             .blocks
             .values()
             .filter_map(|block| block.mutation.get("proccode").and_then(Value::as_str))
             .collect();
-        codes.sort_unstable();
-        codes.dedup();
-        let labels: Vec<_> = codes
+        procedure_codes.sort_unstable();
+        procedure_codes.dedup();
+        let procedure_labels: Vec<_> = procedure_codes
             .iter()
-            .map(|code| (code.to_string(), procedures::parts(code).0))
+            .map(|procedure_code| {
+                (
+                    procedure_code.to_string(),
+                    procedures::parse_procedure_code(procedure_code).0,
+                )
+            })
             .collect();
         Self {
             target,
@@ -125,9 +130,9 @@ impl<'a> TargetGenerator<'a> {
             names: declarations(target),
             global_names: stage.map(declarations).unwrap_or_default(),
             procedure_names: allocate_names(
-                labels
+                procedure_labels
                     .iter()
-                    .map(|(code, label)| (code.as_str(), label.trim())),
+                    .map(|(procedure_code, label)| (procedure_code.as_str(), label.trim())),
             ),
         }
     }
@@ -434,7 +439,9 @@ impl<'a> TargetGenerator<'a> {
                 Expression::atom(format!("argument({})", self.argument_name(block)))
             }
             "procedures_prototype" | "procedures_declaration" => match self.procedure(block) {
-                Ok(procedure) => Expression::atom(format!("procedure({})", procedure.name)),
+                Ok(procedure) => {
+                    Expression::atom(format!("procedure({})", procedure.procedure_name))
+                }
                 Err(reason) => Expression::unknown(&reason),
             },
             _ => Expression::unknown(&block.opcode),

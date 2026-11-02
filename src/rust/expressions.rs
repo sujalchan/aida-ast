@@ -1,0 +1,255 @@
+// Copyright (c) 2026 AIDA AST contributers (see AUTHORS.md)
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! lowers Scratch inputs and reporter blocks into Rust expressions.
+//!
+//! follows reporter references recursively, selects a lowering by opcode, and
+//! uses the sibling literal helpers to preserve Scratch input representations.
+
+use std::collections::{HashMap, HashSet};
+
+use serde_json::Value;
+
+use crate::parser::{InputValue, ScratchBlock, ScratchTarget, parse_input};
+
+use super::{
+    literals::{field_value, number_literal, quote, text_literal},
+    statements::variable_field,
+};
+
+// convert a scratch input into a rust value expression, following reporter links recursively.
+pub(super) fn expression(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, String>,
+    active: &mut HashSet<String>,
+) -> String {
+    match input.and_then(parse_input) {
+        Some(InputValue::Number(value)) => number_literal(value),
+        Some(InputValue::String(value)) => text_literal(value),
+        Some(InputValue::VariableReference(reference)) => variables
+            .get(reference.id)
+            .map(|name| format!("{name}.clone()"))
+            .unwrap_or_else(|| unsupported_expression("unknown variable")),
+        Some(InputValue::BlockReference(id)) => {
+            if !active.insert(id.to_owned()) {
+                return unsupported_expression(&format!("expression cycle: {id}"));
+            }
+            let result = target
+                .blocks
+                .get(id)
+                .map(|block| block_expression(target, block, variables, active))
+                .unwrap_or_else(|| unsupported_expression(&format!("missing block: {id}")));
+            active.remove(id);
+            result
+        }
+        Some(InputValue::Empty) => unsupported_expression("empty input"),
+        Some(InputValue::ListReference(_)) => {
+            unsupported_expression("list values are not implemented")
+        }
+        None => unsupported_expression("missing or invalid input"),
+    }
+}
+
+// choose the rust lowering for a reporter block based on its scratch opcode.
+fn block_expression(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, String>,
+    active: &mut HashSet<String>,
+) -> String {
+    let input = |name: &str, active: &mut HashSet<String>| {
+        expression(target, block.inputs.get(name), variables, active)
+    };
+    let binary = |function: &str, left: &str, right: &str, active: &mut HashSet<String>| {
+        format!(
+            "{function}({}, {})",
+            input(left, active),
+            input(right, active)
+        )
+    };
+    match block.opcode.as_str() {
+        "operator_add" => binary("scratch_add", "NUM1", "NUM2", active),
+        "operator_subtract" => binary("scratch_subtract", "NUM1", "NUM2", active),
+        "operator_multiply" => binary("scratch_multiply", "NUM1", "NUM2", active),
+        "operator_divide" => binary("scratch_divide", "NUM1", "NUM2", active),
+        "operator_mod" => binary("scratch_mod", "NUM1", "NUM2", active),
+        "operator_equals" => binary("scratch_equals", "OPERAND1", "OPERAND2", active),
+        "operator_gt" => binary("scratch_greater_than", "OPERAND1", "OPERAND2", active),
+        "operator_lt" => binary("scratch_less_than", "OPERAND1", "OPERAND2", active),
+        "operator_and" => format!(
+            "scratch_and({}, {})",
+            boolean_input(target, block, "OPERAND1", variables, active),
+            boolean_input(target, block, "OPERAND2", variables, active)
+        ),
+        "operator_or" => format!(
+            "scratch_or({}, {})",
+            boolean_input(target, block, "OPERAND1", variables, active),
+            boolean_input(target, block, "OPERAND2", variables, active)
+        ),
+        "operator_join" => binary("scratch_join", "STRING1", "STRING2", active),
+        "operator_letter_of" => binary("scratch_letter", "LETTER", "STRING", active),
+        "operator_length" => format!("scratch_length({})", input("STRING", active)),
+        "operator_contains" => binary("scratch_contains", "STRING1", "STRING2", active),
+        "operator_round" => format!("scratch_round({})", input("NUM", active)),
+        "operator_not" => format!(
+            "scratch_not({})",
+            boolean_input(target, block, "OPERAND", variables, active)
+        ),
+        "operator_random" => format!(
+            "scratch_random({}, {})",
+            random_argument(target, block.inputs.get("FROM"), variables, active),
+            random_argument(target, block.inputs.get("TO"), variables, active)
+        ),
+        "operator_mathop" => math_expression(target, block, variables, active),
+        "data_variable" => variable_field(block, "VARIABLE", variables)
+            .map(|name| format!("{name}.clone()"))
+            .unwrap_or_else(|| unsupported_expression("missing variable reference")),
+        "math_number"
+        | "math_integer"
+        | "math_whole_number"
+        | "math_positive_number"
+        | "math_angle" => field_value(block, "NUM")
+            .map(number_literal)
+            .unwrap_or_else(|| unsupported_expression("missing numeric field")),
+        "text" => field_value(block, "TEXT")
+            .map(text_literal)
+            .unwrap_or_else(|| unsupported_expression("missing text field")),
+        opcode => unsupported_expression(&format!("unsupported reporter: {opcode}")),
+    }
+}
+
+// lower math reporters, keeping literal numbers direct and converting dynamic inputs at runtime.
+fn math_expression(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, String>,
+    active: &mut HashSet<String>,
+) -> String {
+    let value = expression(target, block.inputs.get("NUM"), variables, active);
+    let numeric = numeric_literal(target, block.inputs.get("NUM"))
+        .map(|literal| {
+            if literal.starts_with('-') {
+                format!("({literal})")
+            } else {
+                literal
+            }
+        })
+        .unwrap_or_else(|| format!("scratch_to_number({value})"));
+    let Some(operator) = field_value(block, "OPERATOR").and_then(Value::as_str) else {
+        return unsupported_expression("missing math operator");
+    };
+    match operator {
+        "sin" => return format!("scratch_sin({value})"),
+        "cos" => return format!("scratch_cos({value})"),
+        "tan" => return format!("scratch_tan({value})"),
+        "asin" => return format!("scratch_asin_degrees({value})"),
+        "acos" => return format!("scratch_acos_degrees({value})"),
+        "atan" => return format!("scratch_atan_degrees({value})"),
+        _ => {}
+    }
+    let operation = match operator {
+        "abs" => "abs()",
+        "floor" => "floor()",
+        "ceiling" => "ceil()",
+        "sqrt" => "sqrt()",
+        "ln" => "ln()",
+        "log" => "log10()",
+        "e ^" => "exp()",
+        "10 ^" => return format!("10.0_f64.powf({numeric})"),
+        _ => {
+            return unsupported_expression(&format!("unsupported math operator: {operator}"));
+        }
+    };
+    format!("{numeric}.{operation}")
+}
+
+// return a direct numeric literal when the input is a number primitive or number reporter.
+fn numeric_literal(target: &ScratchTarget, input: Option<&Value>) -> Option<String> {
+    match input.and_then(parse_input)? {
+        InputValue::Number(value) => Some(number_literal(value)),
+        InputValue::BlockReference(id) => {
+            let block = target.blocks.get(id)?;
+            matches!(
+                block.opcode.as_str(),
+                "math_number"
+                    | "math_integer"
+                    | "math_whole_number"
+                    | "math_positive_number"
+                    | "math_angle"
+            )
+            .then(|| field_value(block, "NUM").map(number_literal))?
+        }
+        _ => None,
+    }
+}
+
+// preserve numeric spelling for random inputs because scratch distinguishes 10 from 10.0.
+fn random_argument(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, String>,
+    active: &mut HashSet<String>,
+) -> String {
+    match input.and_then(parse_input) {
+        Some(InputValue::Number(value)) => value
+            .as_str()
+            .map(|text| quote(text))
+            .or_else(|| value.as_number().map(|number| quote(&number.to_string())))
+            .unwrap_or_else(|| expression(target, input, variables, active)),
+        Some(InputValue::BlockReference(id)) => {
+            let Some(block) = target.blocks.get(id) else {
+                return expression(target, input, variables, active);
+            };
+            if matches!(
+                block.opcode.as_str(),
+                "math_number"
+                    | "math_integer"
+                    | "math_whole_number"
+                    | "math_positive_number"
+                    | "math_angle"
+            ) {
+                if let Some(value) = field_value(block, "NUM") {
+                    if let Some(text) = value.as_str() {
+                        return quote(text);
+                    }
+                    if let Some(number) = value.as_number() {
+                        return quote(&number.to_string());
+                    }
+                }
+            }
+            expression(target, input, variables, active)
+        }
+        _ => expression(target, input, variables, active),
+    }
+}
+
+// emit a typed placeholder that reports why this expression could not be lowered.
+fn unsupported_expression(reason: &str) -> String {
+    format!("ScratchValue::Number(todo!({}))", quote(reason))
+}
+
+// lower a boolean socket, using false when the Scratch socket is empty.
+fn boolean_input(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    name: &str,
+    variables: &HashMap<String, String>,
+    active: &mut HashSet<String>,
+) -> String {
+    match block.inputs.get(name).and_then(parse_input) {
+        Some(InputValue::Empty) | None => "false".to_owned(),
+        Some(_) => expression(target, block.inputs.get(name), variables, active),
+    }
+}

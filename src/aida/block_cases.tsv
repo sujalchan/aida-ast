@@ -92,7 +92,7 @@ math_integer	reporter	{}	{"NUM":["12",null]}	12
 math_whole_number	reporter	{}	{"NUM":["12",null]}	12
 math_positive_number	reporter	{}	{"NUM":["12",null]}	12
 math_angle	reporter	{}	{"NUM":["12",null]}	12
-matrix	reporter	{}	{"MATRIX":["0101010101010101010101010",null]}	"0101010101010101010101010"
+matrix	reporter	{}	{"MATRIX":["0101010101010101010101010",null]}	101010101010101000000000
 motion_movesteps	statement	{"STEPS":[1,[4,"11"]]}	{}	move 11
 motion_turnright	statement	{"DEGREES":[1,[4,"11"]]}	{}	turn_right 11
 motion_turnleft	statement	{"DEGREES":[1,[4,"11"]]}	{}	turn_left 11

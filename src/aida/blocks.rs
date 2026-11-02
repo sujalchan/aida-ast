@@ -12,20 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! maps supported scratch opcodes to fixed aida output templates.
+//!
+//! each rule identifies whether a block is a statement, reporter, hat, or
+//! literal field. templates use placeholders for inputs, fields, variables,
+//! and lists; graph traversal and nested expression rendering live in aida.rs.
+
 // Templates use {INPUT}, {@FIELD}, {$VARIABLE}, and {#LIST}. Fields are
 // literal values; variable/list fields resolve IDs to generated identifiers.
 // Graph traversal, operators, control bodies and procedures live in aida.rs.
 pub enum Rule {
+    /// a command that appears in a script body.
     Statement(&'static str),
+    /// a value-producing block that can appear inside an expression.
     Reporter(&'static str),
+    /// an event or script-starting block.
     Hat(&'static str),
+    /// a field copied as text without expression rendering.
     TextField(&'static str),
+    /// a field parsed and rendered as a number.
     NumberField(&'static str),
 }
 
+/// Look up the template for a block that can be rendered by a fixed rule.
+/// Blocks with nested control flow or custom procedure data are handled in aida.rs.
 pub fn rule(opcode: &str) -> Option<Rule> {
     use Rule::*;
     Some(match opcode {
+        // literal and menu blocks expose a single field value.
         "colour_picker" => TextField("COLOUR"),
         "math_number"
         | "math_integer"
@@ -36,6 +50,7 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "matrix" => TextField("MATRIX"),
         "text" => TextField("TEXT"),
 
+        // control commands and reporters.
         "control_stop" => Statement("stop {@STOP_OPTION}"),
         "control_wait" => Statement("wait {DURATION}"),
         "control_wait_until" => Statement("wait_until {?CONDITION}"),
@@ -47,6 +62,7 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "control_incr_counter" => Statement("increment_counter"),
         "control_clear_counter" => Statement("clear_counter"),
 
+        // variable and list commands.
         "data_variable" => Reporter("{$VARIABLE}"),
         "data_setvariableto" => Statement("set: {$VARIABLE} = {VALUE}"),
         "data_changevariableby" => Statement("change: {$VARIABLE} by {VALUE}"),
@@ -66,6 +82,7 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "data_showlist" => Statement("show_list: {#LIST}"),
         "data_hidelist" => Statement("hide_list: {#LIST}"),
 
+        // event hats and broadcast commands.
         "event_whentouchingobject" => Hat("touching({TOUCHINGOBJECTMENU})"),
         "event_touchingobjectmenu" => TextField("TOUCHINGOBJECTMENU"),
         "event_whenflagclicked" => Hat("green_flag"),
@@ -79,7 +96,7 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "event_broadcast" => Statement("broadcast {BROADCAST_INPUT}"),
         "event_broadcastandwait" => Statement("broadcast_and_wait {BROADCAST_INPUT}"),
 
-        // These names are the Scratch Blocks extension demonstration blocks.
+        // these names are the scratch blocks extension demonstration blocks.
         "extension_pen_down" => Statement("pen_down"),
         "extension_music_drum" => Statement("play_drum {NUMBER}"),
         "extension_wedo_motor" => Statement("turn_motor"),
@@ -91,7 +108,7 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "extension_microbit_display" => Statement("display_matrix {MATRIX}"),
         "extension_music_play_note" => Statement("play_note {NOTE} for {BEATS} beats"),
 
-        // Serialized Scratch 3 Pen extension opcodes, including legacy blocks.
+        // serialized scratch 3 pen extension opcodes, including legacy blocks.
         "pen_clear" => Statement("clear_pen"),
         "pen_stamp" => Statement("stamp"),
         "pen_penDown" => Statement("pen_down"),
@@ -107,6 +124,7 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "pen_setPenHueToNumber" => Statement("set_pen_hue {HUE}"),
         "pen_changePenHueBy" => Statement("change_pen_hue by {HUE}"),
 
+        // looks commands, reporters, and their menu blocks.
         "looks_sayforsecs" => Statement("say {MESSAGE} for {SECS} seconds"),
         "looks_say" => Statement("say {MESSAGE}"),
         "looks_thinkforsecs" => Statement("think {MESSAGE} for {SECS} seconds"),
@@ -134,6 +152,7 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "looks_switchbackdroptoandwait" => Statement("switch_backdrop_and_wait {BACKDROP}"),
         "looks_nextbackdrop" => Statement("next_backdrop"),
 
+        // motion commands, reporters, and menu blocks.
         "motion_movesteps" => Statement("move {STEPS}"),
         "motion_turnright" => Statement("turn_right {DEGREES}"),
         "motion_turnleft" => Statement("turn_left {DEGREES}"),
@@ -160,16 +179,18 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "motion_xscroll" => Reporter("x_scroll()"),
         "motion_yscroll" => Reporter("y_scroll()"),
 
+        // operator reporters.
         "operator_random" => Reporter("random({FROM}, {TO})"),
         "operator_join" => Reporter("join({STRING1}, {STRING2})"),
         "operator_letter_of" => Reporter("letter({LETTER}, {STRING})"),
         "operator_length" => Reporter("length({STRING})"),
         "operator_contains" => Reporter("contains({STRING1}, {STRING2})"),
-        // Scratch modulo has different negative-operand semantics from Rust %.
+        // scratch modulo has different negative-operand semantics from rust %.
         "operator_mod" => Reporter("mod({NUM1}, {NUM2})"),
         "operator_round" => Reporter("round({NUM})"),
         "operator_mathop" => Reporter("math({@OPERATOR}, {NUM})"),
 
+        // sensing commands, reporters, and menu blocks.
         "sensing_touchingobject" => Reporter("touching({TOUCHINGOBJECTMENU})"),
         "sensing_touchingobjectmenu" => TextField("TOUCHINGOBJECTMENU"),
         "sensing_touchingcolor" => Reporter("touching_color({COLOR})"),
@@ -195,6 +216,7 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "sensing_username" => Reporter("username()"),
         "sensing_userid" => Reporter("user_id()"),
 
+        // sound commands, reporters, and menu blocks.
         "sound_sounds_menu" => TextField("SOUND_MENU"),
         "sound_play" => Statement("play_sound {SOUND_MENU}"),
         "sound_playuntildone" => Statement("play_sound_until_done {SOUND_MENU}"),

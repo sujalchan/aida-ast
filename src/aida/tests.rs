@@ -257,12 +257,12 @@ fn preserves_precedence_and_right_hand_grouping() {
 }
 
 #[test]
-fn preserves_literal_types_and_escapes_strings() {
+fn normalizes_numeric_text_and_escapes_other_strings() {
     let target = target(vec![]);
     let generator = TargetGenerator::new(&target, None);
     let cases = [
         (number("50"), "50"),
-        (text("50"), "\"50\""),
+        (text("50"), "50"),
         (text(""), "\"\""),
         (text("a\"b\\c\n"), "\"a\\\"b\\\\c\\n\""),
         (number("+5"), "5"),
@@ -402,7 +402,7 @@ fn generates_nested_control_bodies_and_then_continues() {
 }
 
 #[test]
-fn resolves_variable_ids_and_keeps_cloud_and_string_initializers() {
+fn resolves_variable_ids_and_normalizes_numeric_string_initializers() {
     let mut stage = target(vec![]);
     stage.name = "Stage".to_owned();
     stage.is_stage = true;
@@ -427,7 +427,7 @@ fn resolves_variable_ids_and_keeps_cloud_and_string_initializers() {
     let output = generate(&ScratchProject {
         targets: vec![stage, sprite],
     });
-    assert!(output.contains("cloud var: global_name = \"007\""));
+    assert!(output.contains("cloud var: global_name = 7"));
     assert!(output.contains("var: local_name = false"));
 }
 
@@ -508,7 +508,7 @@ fn reads_integer_json_values_and_nested_join_inside_arithmetic() {
     let output = generate(&project);
     assert!(output.contains("var: test_2 = 12"));
     assert!(output.contains("set: test_2 = join(1, 1) + 2"));
-    assert_eq!(render_expression(&project.targets[0], "loose"), "\"12\"");
+    assert_eq!(render_expression(&project.targets[0], "loose"), "12");
     assert!(!output.contains("unknown"));
 }
 
@@ -537,7 +537,7 @@ fn decodes_lists_compact_reporters_and_nested_menu_references() {
         "list_contents(to_do)"
     );
     let output = generate(&project);
-    assert!(output.contains("list: to_do = [12, \"12\", true]"));
+    assert!(output.contains("list: to_do = [12, 12, true]"));
     assert!(output.contains("delete: to_do at \"all\"\n            play_sound \"Meow 2\""));
     assert!(!output.contains("unknown"));
 }
@@ -717,13 +717,13 @@ fn category_labels_are_not_executable_scripts() {
 }
 
 #[test]
-fn all_primitive_tags_keep_the_active_value_and_type() {
+fn all_primitive_tags_keep_the_active_value() {
     let sprite = target(vec![]);
     let generator = TargetGenerator::new(&sprite, None);
     for code in 4..=13 {
         let expected = match code {
             4..=8 => "12",
-            9..=11 => "\"12\"",
+            9..=11 => "12",
             12 => "_12",
             13 => "list_contents(_12)",
             _ => unreachable!(),

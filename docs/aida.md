@@ -117,7 +117,12 @@ parse error. Original Scratch IDs and procedure mutation data remain in the pars
 
 - `src/parser.rs`: targets, variables, lists, blocks, procedure metadata and input decoding.
 - `src/aida.rs`: AIDA output, naming, graph traversal and nested expressions.
-- `src/rust.rs`: Rust output using the runtime's `ScratchValue` operator API.
+- `src/rust/mod.rs`: public Rust-generator entry point.
+- `src/rust/project.rs`: generated module setup and saved variable declarations.
+- `src/rust/scripts.rs`: supported event-hat selection and script ordering.
+- `src/rust/statements.rs`: statement-chain traversal and statement lowering.
+- `src/rust/expressions.rs`: reporter and operator lowering.
+- `src/rust/literals.rs`: Rust literal, field, and line formatting helpers.
 - `src/aida/blocks.rs`: ordinary commands, reporters, menus and hats.
 - `src/aida/procedures.rs`: procedure signatures, arguments and calls.
 - `src/aida/tests.rs` and `block_cases.tsv`: regression and coverage checks.
