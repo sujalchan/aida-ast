@@ -30,3 +30,12 @@ pub fn extract_project_json<P: AsRef<Path>>(
 
     Ok(())
 }
+
+pub fn read_project_json<P: AsRef<Path>>(sb3_path: P) -> Result<String, Box<dyn Error>> {
+    let file = File::open(sb3_path)?;
+    let mut archive = ZipArchive::new(file)?;
+    let mut project_json = archive.by_name("project.json")?;
+    let mut contents = String::new();
+    io::Read::read_to_string(&mut project_json, &mut contents)?;
+    Ok(contents)
+}

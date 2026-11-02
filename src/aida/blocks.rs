@@ -1,0 +1,232 @@
+// Copyright (c) 2026 AIDA AST contributers (see AUTHORS.md)
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! maps supported scratch opcodes to fixed aida output templates.
+//!
+//! each rule identifies whether a block is a statement, reporter, hat, or
+//! literal field. templates use placeholders for inputs, fields, variables,
+//! and lists; graph traversal and nested expression rendering live in aida.rs.
+
+// Templates use {INPUT}, {@FIELD}, {$VARIABLE}, and {#LIST}. Fields are
+// literal values; variable/list fields resolve IDs to generated identifiers.
+// Graph traversal, operators, control bodies and procedures live in aida.rs.
+pub enum Rule {
+    /// a command that appears in a script body.
+    Statement(&'static str),
+    /// a value-producing block that can appear inside an expression.
+    Reporter(&'static str),
+    /// an event or script-starting block.
+    Hat(&'static str),
+    /// a field copied as text without expression rendering.
+    TextField(&'static str),
+    /// a field parsed and rendered as a number.
+    NumberField(&'static str),
+}
+
+/// Look up the template for a block that can be rendered by a fixed rule.
+/// Blocks with nested control flow or custom procedure data are handled in aida.rs.
+pub fn rule(opcode: &str) -> Option<Rule> {
+    use Rule::*;
+    Some(match opcode {
+        // literal and menu blocks expose a single field value.
+        "colour_picker" => TextField("COLOUR"),
+        "math_number"
+        | "math_integer"
+        | "math_whole_number"
+        | "math_positive_number"
+        | "math_angle" => NumberField("NUM"),
+        "note" => NumberField("NOTE"),
+        "matrix" => TextField("MATRIX"),
+        "text" => TextField("TEXT"),
+
+        // control commands and reporters.
+        "control_stop" => Statement("stop {@STOP_OPTION}"),
+        "control_wait" => Statement("wait {DURATION}"),
+        "control_wait_until" => Statement("wait_until {?CONDITION}"),
+        "control_start_as_clone" => Hat("clone_start"),
+        "control_create_clone_of_menu" => TextField("CLONE_OPTION"),
+        "control_create_clone_of" => Statement("create_clone {CLONE_OPTION}"),
+        "control_delete_this_clone" => Statement("delete_clone"),
+        "control_get_counter" => Reporter("counter()"),
+        "control_incr_counter" => Statement("increment_counter"),
+        "control_clear_counter" => Statement("clear_counter"),
+
+        // variable and list commands.
+        "data_variable" => Reporter("{$VARIABLE}"),
+        "data_setvariableto" => Statement("set: {$VARIABLE} = {VALUE}"),
+        "data_changevariableby" => Statement("change: {$VARIABLE} by {VALUE}"),
+        "data_showvariable" => Statement("show_var: {$VARIABLE}"),
+        "data_hidevariable" => Statement("hide_var: {$VARIABLE}"),
+        "data_listcontents" => Reporter("list_contents({#LIST})"),
+        "data_listindexall" | "data_listindexrandom" => TextField("INDEX"),
+        "data_addtolist" => Statement("append: {#LIST} with {ITEM}"),
+        "data_deleteoflist" => Statement("delete: {#LIST} at {INDEX}"),
+        "data_deletealloflist" => Statement("clear_list: {#LIST}"),
+        "data_insertatlist" => Statement("insert: {#LIST} at {INDEX} = {ITEM}"),
+        "data_replaceitemoflist" => Statement("replace: {#LIST} at {INDEX} = {ITEM}"),
+        "data_itemoflist" => Reporter("item({#LIST}, {INDEX})"),
+        "data_itemnumoflist" => Reporter("index_of({#LIST}, {ITEM})"),
+        "data_lengthoflist" => Reporter("list_length({#LIST})"),
+        "data_listcontainsitem" => Reporter("list_contains({#LIST}, {ITEM})"),
+        "data_showlist" => Statement("show_list: {#LIST}"),
+        "data_hidelist" => Statement("hide_list: {#LIST}"),
+
+        // event hats and broadcast commands.
+        "event_whentouchingobject" => Hat("touching({TOUCHINGOBJECTMENU})"),
+        "event_touchingobjectmenu" => TextField("TOUCHINGOBJECTMENU"),
+        "event_whenflagclicked" => Hat("green_flag"),
+        "event_whenthisspriteclicked" => Hat("sprite_clicked"),
+        "event_whenstageclicked" => Hat("stage_clicked"),
+        "event_whenbroadcastreceived" => Hat("broadcast({@BROADCAST_OPTION})"),
+        "event_whenbackdropswitchesto" => Hat("backdrop({@BACKDROP})"),
+        "event_whengreaterthan" => Hat("greater_than({@WHENGREATERTHANMENU}, {VALUE})"),
+        "event_whenkeypressed" => Hat("key_pressed({@KEY_OPTION})"),
+        "event_broadcast_menu" => TextField("BROADCAST_OPTION"),
+        "event_broadcast" => Statement("broadcast {BROADCAST_INPUT}"),
+        "event_broadcastandwait" => Statement("broadcast_and_wait {BROADCAST_INPUT}"),
+
+        // these names are the scratch blocks extension demonstration blocks.
+        "extension_pen_down" => Statement("pen_down"),
+        "extension_music_drum" => Statement("play_drum {NUMBER}"),
+        "extension_wedo_motor" => Statement("turn_motor"),
+        "extension_wedo_hat" => Hat("wearing_hat"),
+        "extension_wedo_boolean" => Reporter("wedo_boolean()"),
+        "extension_wedo_tilt_reporter" => Reporter("tilt_angle({TILT})"),
+        "extension_wedo_tilt_menu" => TextField("TILT"),
+        "extension_music_reporter" => Reporter("music_reporter()"),
+        "extension_microbit_display" => Statement("display_matrix {MATRIX}"),
+        "extension_music_play_note" => Statement("play_note {NOTE} for {BEATS} beats"),
+
+        // serialized scratch 3 pen extension opcodes, including legacy blocks.
+        "pen_clear" => Statement("clear_pen"),
+        "pen_stamp" => Statement("stamp"),
+        "pen_penDown" => Statement("pen_down"),
+        "pen_penUp" => Statement("pen_up"),
+        "pen_setPenColorToColor" => Statement("set_pen_color {COLOR}"),
+        "pen_changePenColorParamBy" => Statement("change_pen_color {COLOR_PARAM} by {VALUE}"),
+        "pen_setPenColorParamTo" => Statement("set_pen_color {COLOR_PARAM} to {VALUE}"),
+        "pen_menu_colorParam" => TextField("colorParam"),
+        "pen_changePenSizeBy" => Statement("change_pen_size by {SIZE}"),
+        "pen_setPenSizeTo" => Statement("set_pen_size {SIZE}"),
+        "pen_setPenShadeToNumber" => Statement("set_pen_shade {SHADE}"),
+        "pen_changePenShadeBy" => Statement("change_pen_shade by {SHADE}"),
+        "pen_setPenHueToNumber" => Statement("set_pen_hue {HUE}"),
+        "pen_changePenHueBy" => Statement("change_pen_hue by {HUE}"),
+
+        // looks commands, reporters, and their menu blocks.
+        "looks_sayforsecs" => Statement("say {MESSAGE} for {SECS} seconds"),
+        "looks_say" => Statement("say {MESSAGE}"),
+        "looks_thinkforsecs" => Statement("think {MESSAGE} for {SECS} seconds"),
+        "looks_think" => Statement("think {MESSAGE}"),
+        "looks_show" => Statement("show"),
+        "looks_hide" => Statement("hide"),
+        "looks_hideallsprites" => Statement("hide_all_sprites"),
+        "looks_changeeffectby" => Statement("change_effect {@EFFECT} by {CHANGE}"),
+        "looks_seteffectto" => Statement("set_effect {@EFFECT} to {VALUE}"),
+        "looks_cleargraphiceffects" => Statement("clear_effects"),
+        "looks_changesizeby" => Statement("change_size by {CHANGE}"),
+        "looks_setsizeto" => Statement("set_size {SIZE}"),
+        "looks_size" => Reporter("size()"),
+        "looks_changestretchby" => Statement("change_stretch by {CHANGE}"),
+        "looks_setstretchto" => Statement("set_stretch {STRETCH}"),
+        "looks_costume" => TextField("COSTUME"),
+        "looks_switchcostumeto" => Statement("switch_costume {COSTUME}"),
+        "looks_nextcostume" => Statement("next_costume"),
+        "looks_switchbackdropto" => Statement("switch_backdrop {BACKDROP}"),
+        "looks_backdrops" => TextField("BACKDROP"),
+        "looks_gotofrontback" => Statement("go_to_layer {@FRONT_BACK}"),
+        "looks_goforwardbackwardlayers" => Statement("move_layers {@FORWARD_BACKWARD} by {NUM}"),
+        "looks_backdropnumbername" => Reporter("backdrop({@NUMBER_NAME})"),
+        "looks_costumenumbername" => Reporter("costume({@NUMBER_NAME})"),
+        "looks_switchbackdroptoandwait" => Statement("switch_backdrop_and_wait {BACKDROP}"),
+        "looks_nextbackdrop" => Statement("next_backdrop"),
+
+        // motion commands, reporters, and menu blocks.
+        "motion_movesteps" => Statement("move {STEPS}"),
+        "motion_turnright" => Statement("turn_right {DEGREES}"),
+        "motion_turnleft" => Statement("turn_left {DEGREES}"),
+        "motion_pointindirection" => Statement("point_direction {DIRECTION}"),
+        "motion_pointtowards_menu" => TextField("TOWARDS"),
+        "motion_pointtowards" => Statement("point_towards {TOWARDS}"),
+        "motion_goto_menu" | "motion_glideto_menu" => TextField("TO"),
+        "motion_gotoxy" => Statement("go_to x: {X}, y: {Y}"),
+        "motion_goto" => Statement("go_to {TO}"),
+        "motion_glidesecstoxy" => Statement("glide {SECS} seconds to x: {X}, y: {Y}"),
+        "motion_glideto" => Statement("glide {SECS} seconds to {TO}"),
+        "motion_changexby" => Statement("change_x by {DX}"),
+        "motion_setx" => Statement("set_x {X}"),
+        "motion_changeyby" => Statement("change_y by {DY}"),
+        "motion_sety" => Statement("set_y {Y}"),
+        "motion_ifonedgebounce" => Statement("bounce_on_edge"),
+        "motion_setrotationstyle" => Statement("set_rotation_style {@STYLE}"),
+        "motion_xposition" => Reporter("x_position()"),
+        "motion_yposition" => Reporter("y_position()"),
+        "motion_direction" => Reporter("direction()"),
+        "motion_scroll_right" => Statement("scroll_right {DISTANCE}"),
+        "motion_scroll_up" => Statement("scroll_up {DISTANCE}"),
+        "motion_align_scene" => Statement("align_scene {@ALIGNMENT}"),
+        "motion_xscroll" => Reporter("x_scroll()"),
+        "motion_yscroll" => Reporter("y_scroll()"),
+
+        // operator reporters.
+        "operator_random" => Reporter("random({FROM}, {TO})"),
+        "operator_join" => Reporter("join({STRING1}, {STRING2})"),
+        "operator_letter_of" => Reporter("letter({LETTER}, {STRING})"),
+        "operator_length" => Reporter("length({STRING})"),
+        "operator_contains" => Reporter("contains({STRING1}, {STRING2})"),
+        // scratch modulo has different negative-operand semantics from rust %.
+        "operator_mod" => Reporter("mod({NUM1}, {NUM2})"),
+        "operator_round" => Reporter("round({NUM})"),
+        "operator_mathop" => Reporter("math({@OPERATOR}, {NUM})"),
+
+        // sensing commands, reporters, and menu blocks.
+        "sensing_touchingobject" => Reporter("touching({TOUCHINGOBJECTMENU})"),
+        "sensing_touchingobjectmenu" => TextField("TOUCHINGOBJECTMENU"),
+        "sensing_touchingcolor" => Reporter("touching_color({COLOR})"),
+        "sensing_coloristouchingcolor" => Reporter("color_touching_color({COLOR}, {COLOR2})"),
+        "sensing_distanceto" => Reporter("distance_to({DISTANCETOMENU})"),
+        "sensing_distancetomenu" => TextField("DISTANCETOMENU"),
+        "sensing_askandwait" => Statement("ask_and_wait {QUESTION}"),
+        "sensing_answer" => Reporter("answer()"),
+        "sensing_keypressed" => Reporter("key_pressed({KEY_OPTION})"),
+        "sensing_keyoptions" => TextField("KEY_OPTION"),
+        "sensing_mousedown" => Reporter("mouse_down()"),
+        "sensing_mousex" => Reporter("mouse_x()"),
+        "sensing_mousey" => Reporter("mouse_y()"),
+        "sensing_setdragmode" => Statement("set_drag_mode {@DRAG_MODE}"),
+        "sensing_loudness" => Reporter("loudness()"),
+        "sensing_loud" => Reporter("loud()"),
+        "sensing_timer" => Reporter("timer()"),
+        "sensing_resettimer" => Statement("reset_timer"),
+        "sensing_of_object_menu" => TextField("OBJECT"),
+        "sensing_of" => Reporter("property({@PROPERTY}, {OBJECT})"),
+        "sensing_current" => Reporter("current({@CURRENTMENU})"),
+        "sensing_dayssince2000" => Reporter("days_since_2000()"),
+        "sensing_username" => Reporter("username()"),
+        "sensing_userid" => Reporter("user_id()"),
+
+        // sound commands, reporters, and menu blocks.
+        "sound_sounds_menu" => TextField("SOUND_MENU"),
+        "sound_play" => Statement("play_sound {SOUND_MENU}"),
+        "sound_playuntildone" => Statement("play_sound_until_done {SOUND_MENU}"),
+        "sound_stopallsounds" => Statement("stop_all_sounds"),
+        "sound_seteffectto" => Statement("set_sound_effect {@EFFECT} to {VALUE}"),
+        "sound_changeeffectby" => Statement("change_sound_effect {@EFFECT} by {VALUE}"),
+        "sound_cleareffects" => Statement("clear_sound_effects"),
+        "sound_changevolumeby" => Statement("change_volume by {VOLUME}"),
+        "sound_setvolumeto" => Statement("set_volume {VOLUME}"),
+        "sound_volume" => Reporter("volume()"),
+        _ => return None,
+    })
+}

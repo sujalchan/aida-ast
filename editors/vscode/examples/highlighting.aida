@@ -1,0 +1,40 @@
+project {
+    stage "Stage" {
+        cloud var: score = 0
+        var: test_2 = 1.25e-3
+        list: shopping_list = ["apples", 2, true]
+    }
+
+    sprite "Sprite1" {
+        on green_flag {
+            set: test_2 = join("hello", " world") + 2
+            change: score by 1
+            append: shopping_list with "pears"
+            delete: shopping_list at "last"
+            clear_pen
+            set_pen_color "#3366ff"
+            set_pen_size 2
+            pen_down
+            repeat 4 {
+                move 50
+                turn_right 90
+            }
+            pen_up
+            call: greet("AIDA", true)
+        }
+
+        on key_pressed("space") {
+            if score > 10 && !mouse_down() {
+                say "A quote: \" and a newline: \n"
+            } else {
+                say global.score
+            }
+        }
+
+        define: greet(message: value = "", enabled: bool = false) warp {
+            if argument(enabled) {
+                say argument(message)
+            }
+        }
+    }
+}

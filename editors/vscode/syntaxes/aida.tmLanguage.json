@@ -1,0 +1,237 @@
+{
+  "name": "AIDA",
+  "scopeName": "source.aida",
+  "patterns": [
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#procedures"
+    },
+    {
+      "include": "#parameters"
+    },
+    {
+      "include": "#named-commands"
+    },
+    {
+      "include": "#events"
+    },
+    {
+      "include": "#statements"
+    },
+    {
+      "include": "#functions"
+    },
+    {
+      "include": "#literals"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#identifiers"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "strings": {
+      "name": "string.quoted.double.aida",
+      "begin": "\"",
+      "end": "\"|(?=$)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.aida"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.aida"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.aida",
+          "match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4})"
+        },
+        {
+          "name": "invalid.illegal.escape.aida",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "declarations": {
+      "match": "^\\s*(?:(cloud)\\s+)?(var|list)(:)\\s*([\\p{L}\\p{N}_]+)",
+      "captures": {
+        "1": {
+          "name": "storage.modifier.aida"
+        },
+        "2": {
+          "name": "storage.type.aida"
+        },
+        "3": {
+          "name": "punctuation.separator.aida"
+        },
+        "4": {
+          "name": "variable.other.definition.aida"
+        }
+      }
+    },
+    "procedures": {
+      "match": "^\\s*(define|declare|call)(:)\\s*([\\p{L}\\p{N}_]+)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.aida"
+        },
+        "2": {
+          "name": "punctuation.separator.aida"
+        },
+        "3": {
+          "name": "entity.name.function.aida"
+        }
+      }
+    },
+    "parameters": {
+      "match": "\\b([\\p{L}\\p{N}_]+)\\s*(:)\\s*(bool|number|value)\\b",
+      "captures": {
+        "1": {
+          "name": "variable.parameter.aida"
+        },
+        "2": {
+          "name": "punctuation.separator.aida"
+        },
+        "3": {
+          "name": "storage.type.aida"
+        }
+      }
+    },
+    "named-commands": {
+      "match": "^\\s*(set|change|show_var|hide_var|append|delete|clear_list|insert|replace|show_list|hide_list|for_each)(:)\\s*(?:(global)(\\.))?([\\p{L}\\p{N}_]+)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.aida"
+        },
+        "2": {
+          "name": "punctuation.separator.aida"
+        },
+        "3": {
+          "name": "variable.language.aida"
+        },
+        "4": {
+          "name": "punctuation.accessor.aida"
+        },
+        "5": {
+          "name": "variable.other.readwrite.aida"
+        }
+      }
+    },
+    "events": {
+      "match": "^\\s*(on)\\s+(green_flag|sprite_clicked|stage_clicked|clone_start|wearing_hat)\\b",
+      "captures": {
+        "1": {
+          "name": "keyword.control.aida"
+        },
+        "2": {
+          "name": "constant.language.event.aida"
+        }
+      }
+    },
+    "statements": {
+      "patterns": [
+        {
+          "name": "keyword.control.aida",
+          "match": "^\\s*\\b(?:project|stage|sprite|on|repeat|forever|if|repeat_until|while|all_at_once|stop|wait|wait_until|create_clone|delete_clone|increment_counter|clear_counter|broadcast|broadcast_and_wait|pen_down|pen_up|clear_pen|stamp|set_pen_color|change_pen_color|set_pen_size|change_pen_size|set_pen_shade|change_pen_shade|set_pen_hue|change_pen_hue|play_drum|turn_motor|display_matrix|play_note|say|think|show|hide|hide_all_sprites|change_effect|set_effect|clear_effects|change_size|set_size|change_stretch|set_stretch|switch_costume|next_costume|switch_backdrop|go_to_layer|move_layers|switch_backdrop_and_wait|next_backdrop|move|turn_right|turn_left|point_direction|point_towards|go_to|glide|change_x|set_x|change_y|set_y|bounce_on_edge|set_rotation_style|scroll_right|scroll_up|align_scene|ask_and_wait|set_drag_mode|reset_timer|play_sound|play_sound_until_done|stop_all_sounds|set_sound_effect|change_sound_effect|clear_sound_effects|change_volume|set_volume)\\b"
+        },
+        {
+          "name": "keyword.control.conditional.aida",
+          "match": "(?<=\\})\\s*else\\b"
+        },
+        {
+          "name": "storage.modifier.aida",
+          "match": "\\bwarp\\b(?=\\s*(?:\\{|$))"
+        },
+        {
+          "name": "keyword.other.aida",
+          "match": "\\b(?:by|with|at|from|through|for|to|seconds|beats)\\b"
+        },
+        {
+          "name": "invalid.deprecated.aida",
+          "match": "^\\s*unknown\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "invalid.deprecated.aida",
+          "match": "\\bunknown(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.aida",
+          "match": "\\b(?:argument|procedure|counter|list_contents|item|index_of|list_length|list_contains|touching|broadcast|backdrop|greater_than|key_pressed|wedo_boolean|tilt_angle|music_reporter|size|costume|x_position|y_position|direction|x_scroll|y_scroll|random|join|letter|length|contains|mod|round|math|touching_color|color_touching_color|distance_to|answer|mouse_down|mouse_x|mouse_y|loudness|loud|timer|property|current|days_since_2000|username|user_id|volume)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "entity.name.function.aida",
+          "match": "\\b[\\p{L}_][\\p{L}\\p{N}_]*(?=\\s*\\()"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.aida",
+          "match": "\\b(?:true|false)\\b"
+        },
+        {
+          "name": "constant.numeric.aida",
+          "match": "(?<![\\p{L}\\p{N}_.])(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?(?![\\p{L}\\p{N}_])"
+        }
+      ]
+    },
+    "operators": {
+      "name": "keyword.operator.aida",
+      "match": "==|!=|<=|>=|&&|\\|\\||[=+*/!<>-]"
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.language.aida",
+          "match": "\\bglobal(?=\\.)"
+        },
+        {
+          "name": "variable.other.readwrite.aida",
+          "match": "[\\p{L}_][\\p{L}\\p{N}_]*"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.block.aida",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.section.parens.aida",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.section.brackets.aida",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.separator.aida",
+          "match": "[:,]"
+        },
+        {
+          "name": "punctuation.accessor.aida",
+          "match": "\\."
+        }
+      ]
+    }
+  }
+}
