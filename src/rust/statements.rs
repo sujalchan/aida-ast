@@ -468,18 +468,6 @@ fn generate_resumable_block(
             line(
                 output,
                 indent + 2,
-                "if script.frames.last().unwrap().warp_mode {",
-            );
-            line(
-                output,
-                indent + 3,
-                "if script.warp_budget_expired(clock) { return ScriptStatus::Yield; }",
-            );
-            line(output, indent + 3, "continue;");
-            line(output, indent + 2, "}");
-            line(
-                output,
-                indent + 2,
                 "return ScriptStatus::WaitUntil(wait_deadline);",
             );
             line(output, indent + 1, "}");
@@ -488,18 +476,6 @@ fn generate_resumable_block(
                 indent + 1,
                 "if clock.now_millis() < wait_deadline {",
             );
-            line(
-                output,
-                indent + 2,
-                "if script.frames.last().unwrap().warp_mode {",
-            );
-            line(
-                output,
-                indent + 3,
-                "if script.warp_budget_expired(clock) { return ScriptStatus::Yield; }",
-            );
-            line(output, indent + 3, "continue;");
-            line(output, indent + 2, "}");
             line(
                 output,
                 indent + 2,

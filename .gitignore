@@ -5,6 +5,9 @@
 # Test projects are checked-in source fixtures for the --tests runtime mode.
 !/tests/src/*.sb3
 
+# Rust modules generated from the checked-in test projects.
+/tests/output/*.rs
+
 # Ignore extracted or intermediate target files
 extracted_project.json
 *.aida

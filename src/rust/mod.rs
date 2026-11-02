@@ -330,7 +330,7 @@ mod tests {
                     "variables": {"result_id": ["result", 0]},
                     "blocks": {
                         "hat": {
-                            "opcode": "event_whenflagclicked",
+                            "opcode": "control_start_as_clone",
                             "next": "call",
                             "topLevel": true,
                             "inputs": {},
@@ -398,10 +398,11 @@ mod tests {
         assert!(output.contains("arguments: vec![(\"hello\").to_owned().into()]"));
         assert!(output.contains("script.frames.push(ProcedureFrame"));
         assert!(output.contains("function: 1"));
+        assert!(output.contains("new_clone_start_script_sprite1_1(instance)"));
     }
 
     #[test]
-    fn nested_custom_calls_preserve_warp_mode_and_the_callers_pc() {
+    fn clone_nested_custom_calls_preserve_warp_mode_and_the_callers_pc() {
         let project = parse_project(
             &json!({
                 "targets": [{
@@ -409,7 +410,7 @@ mod tests {
                     "isStage": false,
                     "variables": {"done_id": ["done", false], "progress_id": ["progress", 0]},
                     "blocks": {
-                        "hat": {"opcode": "event_whenflagclicked", "next": "call_outer", "topLevel": true, "inputs": {}, "fields": {}},
+                        "hat": {"opcode": "control_start_as_clone", "next": "call_outer", "topLevel": true, "inputs": {}, "fields": {}},
                         "call_outer": {"opcode": "procedures_call", "next": "after_call", "parent": "hat", "inputs": {}, "fields": {}, "mutation": {"proccode": "warp outer", "argumentids": "[]", "warp": "false"}},
                         "after_call": {"opcode": "looks_say", "parent": "call_outer", "inputs": {"MESSAGE": [1, [10, "returned"]]}, "fields": {}},
                         "inner_definition": {"opcode": "procedures_definition", "next": "inner_change", "topLevel": true, "inputs": {"custom_block": [1, "inner_prototype"]}, "fields": {}},
@@ -430,6 +431,8 @@ mod tests {
         .unwrap();
 
         let output = generate(&project);
+        assert!(output.contains("fn new_clone_scripts(target: usize, instance: usize)"));
+        assert!(output.contains("new_clone_start_script_sprite1_1(instance)"));
         assert!(output.contains("warp_mode: inherited_warp || true"));
         assert!(output.contains("warp_mode: inherited_warp || false"));
         assert!(output.contains("if !(scratch_bool(state.get(0)))"));
@@ -518,8 +521,11 @@ mod tests {
                     "isStage": false,
                     "variables": {},
                     "blocks": {
-                        "hat": {"opcode": "event_whenflagclicked", "next": "wait", "topLevel": true, "inputs": {}, "fields": {}},
-                        "wait": {"opcode": "control_wait", "next": "say", "parent": "hat", "inputs": {"DURATION": [1, [4, "0.25"]]}, "fields": {}},
+                        "hat": {"opcode": "control_start_as_clone", "next": "call", "topLevel": true, "inputs": {}, "fields": {}},
+                        "call": {"opcode": "procedures_call", "next": null, "parent": "hat", "inputs": {}, "fields": {}, "mutation": {"proccode": "delay", "argumentids": "[]", "warp": "true"}},
+                        "definition": {"opcode": "procedures_definition", "next": "wait", "topLevel": true, "inputs": {"custom_block": [1, "prototype"]}, "fields": {}},
+                        "prototype": {"opcode": "procedures_prototype", "parent": "definition", "inputs": {}, "fields": {}, "mutation": {"proccode": "delay", "argumentnames": "[]", "argumentids": "[]", "argumentdefaults": "[]", "warp": "true"}},
+                        "wait": {"opcode": "control_wait", "next": "say", "parent": "definition", "inputs": {"DURATION": [1, [4, "0.25"]]}, "fields": {}},
                         "say": {"opcode": "looks_say", "next": null, "parent": "wait", "inputs": {"MESSAGE": [1, [10, "done"]]}, "fields": {}}
                     }
                 }]
@@ -531,6 +537,9 @@ mod tests {
         assert!(output.contains("ScriptStatus::WaitUntil(wait_deadline)"));
         assert!(output.contains("clock.now_millis().saturating_add(duration_ms)"));
         assert!(output.contains("wait_deadlines[0] = None"));
+        assert!(output.contains("warp_mode: inherited_warp || true"));
+        assert!(output.contains("fn new_clone_scripts(target: usize, instance: usize)"));
+        assert!(!output.contains("if script.warp_budget_expired(clock) { return ScriptStatus::Yield; }\n                            continue;"));
         assert!(output.contains("pub fn advance(&mut self) -> SchedulerStatus"));
     }
 
