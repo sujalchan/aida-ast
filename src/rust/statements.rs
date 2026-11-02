@@ -107,6 +107,35 @@ impl ScriptGraph {
                 self.add_chain(target, branch, boundary_pc);
             }
 
+            if matches!(block.opcode.as_str(), "control_if" | "control_if_else") {
+                let then_branch = block.inputs.get("SUBSTACK").and_then(parse_input).and_then(
+                    |value| match value {
+                        InputValue::BlockReference(id) => Some(id),
+                        _ => None,
+                    },
+                );
+                let else_branch = block
+                    .inputs
+                    .get("SUBSTACK2")
+                    .and_then(parse_input)
+                    .and_then(|value| match value {
+                        InputValue::BlockReference(id) => Some(id),
+                        _ => None,
+                    });
+
+                self.add_chain(target, next, continuation);
+                let branch_continuation = next
+                    .and_then(|next_id| self.block_pcs.get(next_id).copied())
+                    .unwrap_or(continuation);
+                self.fallthrough_pcs
+                    .insert(id.to_owned(), branch_continuation);
+                self.add_chain(target, then_branch, branch_continuation);
+                if block.opcode == "control_if_else" {
+                    self.add_chain(target, else_branch, branch_continuation);
+                }
+                return;
+            }
+
             current = next;
         }
     }
@@ -280,6 +309,52 @@ fn generate_resumable_block(
         .and_then(|next| graph.block_pcs.get(next).copied())
         .unwrap_or(graph.fallthrough_pcs[id]);
     match block.opcode.as_str() {
+        "control_if" | "control_if_else" => {
+            let condition = boolean_input(
+                target,
+                block,
+                "CONDITION",
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            let branch_pc = |input_name: &str| {
+                block
+                    .inputs
+                    .get(input_name)
+                    .and_then(parse_input)
+                    .and_then(|input| match input {
+                        InputValue::BlockReference(id) => graph.block_pcs.get(id).copied(),
+                        _ => None,
+                    })
+                    .unwrap_or(next_pc)
+            };
+            line(output, indent + 1, &format!("if {condition} {{"));
+            line(
+                output,
+                indent + 2,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    branch_pc("SUBSTACK")
+                ),
+            );
+            line(output, indent + 1, "} else {");
+            line(
+                output,
+                indent + 2,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    if block.opcode == "control_if_else" {
+                        branch_pc("SUBSTACK2")
+                    } else {
+                        next_pc
+                    }
+                ),
+            );
+            line(output, indent + 1, "}");
+            line(output, indent + 1, "continue;");
+        }
         "control_repeat" => {
             let times = expression(
                 target,

@@ -84,6 +84,19 @@ mod tests {
     }
 
     #[test]
+    fn if_else_fixture_lowers_conditional_branches() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/if-else-test.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("if scratch_and("));
+        assert!(output.contains("} else {"));
+        assert!(!output.contains("unsupported statement: control_if"));
+        assert!(!output.contains("unsupported statement: control_if_else"));
+    }
+
+    #[test]
     fn lowers_dynamic_math_with_scratch_conversion_and_keeps_literal_types() {
         let project = parse_project(
             &json!({
