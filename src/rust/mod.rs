@@ -38,10 +38,49 @@ mod tests {
         let output = generate(&project);
 
         assert!(output.contains("state.create_clone(source, target, 300);"));
-        assert!(output.contains("fn new_clone_scripts(target: usize, instance: usize)"));
-        assert!(output.contains("new_clone_start_script_sprite1_2(instance)"));
-        assert!(output.contains("new_clone_start_script_sprite1_5(instance)"));
+        assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
+        assert!(output.contains("new_clone_start_script_sprite1_2(_instance)"));
+        assert!(output.contains("new_clone_start_script_sprite1_5(_instance)"));
         assert!(output.contains("ScratchVariableMetadata::for_target(\"`jEk@4|i[#Fk?(8x)AV.-my variable\", \"my variable\", \"Stage\", 0, true)"));
+    }
+
+    #[test]
+    fn generated_helpers_and_imports_follow_project_usage() {
+        let project_json = json!({
+            "targets": [{
+                "name": "Stage",
+                "isStage": true,
+                "variables": {},
+                "lists": {},
+                "blocks": {}
+            }]
+        });
+        let project = parse_project(&project_json.to_string()).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("use crate::runtime::{"));
+        assert!(!output.contains("#[allow(unused_imports)]"));
+        assert!(!output.contains("print_value"));
+        assert!(!output.contains("WarpBudget"));
+        assert!(!output.contains("warp_budget_expired"));
+        assert!(!output.contains("yield_at_safe_point"));
+        assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
+        assert!(output.contains("#[allow(dead_code)]\npub fn run()"));
+    }
+
+    #[test]
+    fn generated_warp_guards_only_include_used_helpers() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/clone-with-variables.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("fn warp_budget_expired(&mut self"));
+        assert!(!output.contains("fn yield_at_safe_point(&mut self"));
+        assert!(output.contains("WarpBudget"));
     }
 
     #[test]
@@ -398,7 +437,7 @@ mod tests {
         assert!(output.contains("arguments: vec![(\"hello\").to_owned().into()]"));
         assert!(output.contains("script.frames.push(ProcedureFrame"));
         assert!(output.contains("function: 1"));
-        assert!(output.contains("new_clone_start_script_sprite1_1(instance)"));
+        assert!(output.contains("new_clone_start_script_sprite1_1(_instance)"));
     }
 
     #[test]
@@ -431,8 +470,8 @@ mod tests {
         .unwrap();
 
         let output = generate(&project);
-        assert!(output.contains("fn new_clone_scripts(target: usize, instance: usize)"));
-        assert!(output.contains("new_clone_start_script_sprite1_1(instance)"));
+        assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
+        assert!(output.contains("new_clone_start_script_sprite1_1(_instance)"));
         assert!(output.contains("warp_mode: inherited_warp || true"));
         assert!(output.contains("warp_mode: inherited_warp || false"));
         assert!(output.contains("if !(scratch_bool(state.get(0)))"));
@@ -538,7 +577,7 @@ mod tests {
         assert!(output.contains("clock.now_millis().saturating_add(duration_ms)"));
         assert!(output.contains("wait_deadlines[0] = None"));
         assert!(output.contains("warp_mode: inherited_warp || true"));
-        assert!(output.contains("fn new_clone_scripts(target: usize, instance: usize)"));
+        assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
         assert!(!output.contains("if script.warp_budget_expired(clock) { return ScriptStatus::Yield; }\n                            continue;"));
         assert!(output.contains("pub fn advance(&mut self) -> SchedulerStatus"));
     }

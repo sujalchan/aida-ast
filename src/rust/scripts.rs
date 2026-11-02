@@ -50,10 +50,8 @@ pub(super) fn generate_green_flag_functions(
     }
 
     output.push_str("#[allow(dead_code)]\nstruct ProcedureFrame { function: usize, pc: usize, repeat_counts: Vec<usize>, wait_deadlines: Vec<Option<u64>>, arguments: Vec<ScratchValue>, warp_mode: bool }\n");
-    output.push_str(
-        "struct ScriptState { frames: Vec<ProcedureFrame>, warp_budget: WarpBudget }\n\n",
-    );
-    output.push_str("impl ScriptState {\n    fn warp_budget_expired(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return false; }\n        self.warp_budget.expired(clock)\n    }\n    fn yield_at_safe_point(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return true; }\n        self.warp_budget.expired(clock)\n    }\n}\n\n");
+    output
+        .push_str("struct ScriptState { frames: Vec<ProcedureFrame>, __WARP_BUDGET_FIELD__ }\n\n");
     line(output, 0, "enum GeneratedScript {");
     for script in &scripts {
         line(
@@ -100,7 +98,7 @@ pub(super) fn generate_green_flag_functions(
             output,
             0,
             &format!(
-                "fn new_{}_for(instance: usize) -> GeneratedScript {{ GeneratedScript::{}(instance, ScriptState {{ frames: vec![ProcedureFrame {{ function: 0, pc: {}, repeat_counts: vec![0; {loop_count}], wait_deadlines: vec![None; {wait_count}], arguments: vec![], warp_mode: false }}], warp_budget: WarpBudget::new(500) }}) }}\n",
+                "fn new_{}_for(instance: usize) -> GeneratedScript {{ GeneratedScript::{}(instance, ScriptState {{ frames: vec![ProcedureFrame {{ function: 0, pc: {}, repeat_counts: vec![0; {loop_count}], wait_deadlines: vec![None; {wait_count}], arguments: vec![], warp_mode: false }}], __WARP_BUDGET_INIT__ }}) }}\n",
                 script.function,
                 script.variant,
                 if start_pc == usize::MAX {
@@ -155,7 +153,7 @@ pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
             .filter(|script| {
                 script.target_index == target_index && script.hat.opcode == "control_start_as_clone"
             })
-            .map(|script| format!("new_{}(instance)", script.function))
+            .map(|script| format!("new_{}(_instance)", script.function))
             .collect::<Vec<_>>();
         if !values.is_empty() {
             clone_targets.push(format!("{target_index} => vec![{}]", values.join(", ")));
@@ -170,9 +168,41 @@ pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
         output,
         0,
         &format!(
-            "fn new_clone_scripts(target: usize, instance: usize) -> Vec<GeneratedScript> {{ match target {{ {clone_arms} }} }}\n"
+            "fn new_clone_scripts(target: usize, _instance: usize) -> Vec<GeneratedScript> {{ match target {{ {clone_arms} }} }}\n"
         ),
     );
+
+    let uses_warp_budget_expired = output.contains("script.warp_budget_expired(");
+    let uses_yield_at_safe_point = output.contains("script.yield_at_safe_point(");
+    let uses_warp_budget = output.contains("script.warp_budget")
+        || uses_warp_budget_expired
+        || uses_yield_at_safe_point;
+    let budget_field = if uses_warp_budget {
+        "warp_budget: WarpBudget,"
+    } else {
+        ""
+    };
+    let budget_init = if uses_warp_budget {
+        "warp_budget: WarpBudget::new(500),"
+    } else {
+        ""
+    };
+    *output = output
+        .replace("__WARP_BUDGET_FIELD__", budget_field)
+        .replace("__WARP_BUDGET_INIT__", budget_init);
+
+    let mut helpers = Vec::new();
+    if uses_warp_budget_expired {
+        helpers.push("    fn warp_budget_expired(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return false; }\n        self.warp_budget.expired(clock)\n    }");
+    }
+    if uses_yield_at_safe_point {
+        helpers.push("    fn yield_at_safe_point(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return true; }\n        self.warp_budget.expired(clock)\n    }");
+    }
+    if !helpers.is_empty() {
+        output.push_str("impl ScriptState {\n");
+        output.push_str(&helpers.join("\n"));
+        output.push_str("\n}\n\n");
+    }
 }
 
 struct GreenFlagScript<'a> {

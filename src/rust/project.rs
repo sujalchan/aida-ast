@@ -51,13 +51,7 @@ pub(super) struct ListInfo {
 pub fn generate(project: &ScratchProject) -> String {
     let variables = allocate_variables(project);
     let lists = allocate_lists(project);
-    let mut output = String::from(
-        "#[allow(unused_imports)]\nuse crate::runtime::{\n    scratch_acos_degrees, scratch_add, scratch_and, scratch_asin_degrees, scratch_atan_degrees,\n    scratch_bool, scratch_contains, scratch_cos, scratch_divide, scratch_equals,\n    scratch_greater_than, scratch_join, scratch_length, scratch_less_than, scratch_letter,\n    scratch_mod, scratch_multiply, scratch_not, scratch_or, scratch_random, scratch_round,\n    scratch_sin, scratch_subtract, scratch_tan, scratch_to_number, Clock, ResumableScript,\n    ScratchList, ScratchListMetadata, ScratchState, ScratchValue, ScratchVariableMetadata, ScriptScheduler, ScriptStatus, WarpBudget,\n};\n\n#[allow(unused_macros)]\nmacro_rules! print_value {\n    ($name:expr, $value:expr) => {\n        println!(\"{}: {:?}\", $name, $value);\n    };\n}\n\n",
-    );
-    output = output.replace(
-        "ScratchVariableMetadata, ScriptScheduler, ScriptStatus",
-        "ScratchVariableMetadata, SchedulerStatus, ScriptScheduler, ScriptStatus",
-    );
+    let mut output = String::new();
 
     generate_green_flag_functions(project, &variables, &lists, &mut output);
     generate_scripts(project, &mut output);
@@ -159,8 +153,114 @@ pub fn generate(project: &ScratchProject) -> String {
     );
     output.push_str("    pub fn state(&self) -> &ScratchState { &self.state }\n");
     output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }\n}\n\n");
-    output.push_str("pub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
-    output
+    output.push_str("#[allow(dead_code)]\npub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
+    let identifiers = rust_identifiers(&output);
+    let imports = runtime_imports(&identifiers);
+    let print_value_macro = if identifiers.contains("print_value") {
+        "macro_rules! print_value {\n    ($name:expr, $value:expr) => {\n        println!(\"{}: {:?}\", $name, $value);\n    };\n}\n\n"
+    } else {
+        ""
+    };
+    format!("{imports}{print_value_macro}{output}")
+}
+
+fn runtime_imports(identifiers: &HashSet<String>) -> String {
+    const IMPORTS: &[&str] = &[
+        "scratch_acos_degrees",
+        "scratch_add",
+        "scratch_and",
+        "scratch_asin_degrees",
+        "scratch_atan_degrees",
+        "scratch_bool",
+        "scratch_contains",
+        "scratch_cos",
+        "scratch_divide",
+        "scratch_equals",
+        "scratch_greater_than",
+        "scratch_join",
+        "scratch_length",
+        "scratch_less_than",
+        "scratch_letter",
+        "scratch_mod",
+        "scratch_multiply",
+        "scratch_not",
+        "scratch_or",
+        "scratch_random",
+        "scratch_round",
+        "scratch_sin",
+        "scratch_subtract",
+        "scratch_tan",
+        "scratch_to_number",
+        "Clock",
+        "ResumableScript",
+        "ScratchList",
+        "ScratchListMetadata",
+        "ScratchState",
+        "ScratchValue",
+        "ScratchVariableMetadata",
+        "SchedulerStatus",
+        "ScriptScheduler",
+        "ScriptStatus",
+        "WarpBudget",
+    ];
+    let used = IMPORTS
+        .iter()
+        .copied()
+        .filter(|name| identifiers.contains(*name))
+        .collect::<Vec<_>>();
+    format!("use crate::runtime::{{{}}};\n\n", used.join(", "))
+}
+
+fn rust_identifiers(source: &str) -> HashSet<String> {
+    let characters = source.chars().collect::<Vec<_>>();
+    let mut identifiers = HashSet::new();
+    let mut index = 0;
+    while index < characters.len() {
+        if characters[index] == '"' {
+            index += 1;
+            while index < characters.len() {
+                if characters[index] == '\\' {
+                    index += 2;
+                } else if characters[index] == '"' {
+                    index += 1;
+                    break;
+                } else {
+                    index += 1;
+                }
+            }
+            continue;
+        }
+        if characters[index] == '/' && characters.get(index + 1) == Some(&'/') {
+            index += 2;
+            while index < characters.len() && characters[index] != '\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if characters[index] == '/' && characters.get(index + 1) == Some(&'*') {
+            index += 2;
+            while index + 1 < characters.len()
+                && !(characters[index] == '*' && characters[index + 1] == '/')
+            {
+                index += 1;
+            }
+            index = (index + 2).min(characters.len());
+            continue;
+        }
+        if characters[index] == '_' || characters[index].is_ascii_alphabetic() {
+            let start = index;
+            index += 1;
+            while index < characters.len()
+                && (characters[index] == '_' || characters[index].is_ascii_alphanumeric())
+            {
+                index += 1;
+            }
+            identifiers.insert(characters[start..index].iter().collect());
+            continue;
+        }
+        index += 1;
+    }
+    identifiers
 }
 
 // assign each Scratch variable ID a stable shared-state slot.
