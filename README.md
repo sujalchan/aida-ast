@@ -16,12 +16,32 @@ It provides the foundational parsing pipeline needed to translate visual block-b
 
 ## Installation & Setup
 
-Ensure you have Rust installed (`cargo` 1.70+ recommended).
+Ensure you have Rust installed. For the complete Scratch-to-Rust workflow,
+check out the base `sujalchan/aida` project with both component repositories as
+submodules. Keep `aida-ast` and `aida-runtime` side-by-side under the `aida`
+root; the generator writes generated Rust into `aida-runtime/src/program.rs`.
 
 ```bash
-# Clone the repository
-git clone [https://github.com/sujalchan/aida-ast.git](https://github.com/sujalchan/aida-ast.git)
-cd aida-ast
+# Clone the base project and its component repositories
+git clone --recurse-submodules https://github.com/sujalchan/aida.git
+cd aida
 
-# Build the project
-cargo build --release
+# If the base project was cloned without its submodules
+git submodule update --init --recursive
+
+# Build both workspace members
+cargo build --release --workspace
+```
+
+The expected layout is:
+
+```text
+aida/
+├── Cargo.toml
+├── aida-ast/       # https://github.com/sujalchan/aida-ast
+└── aida-runtime/   # https://github.com/sujalchan/aida-runtime
+```
+
+Run the full pipeline from the base project root so Cargo can find both
+workspace members and the generated runtime destination. See the [base project
+README](https://github.com/sujalchan/aida) for run commands.
