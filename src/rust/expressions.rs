@@ -33,6 +33,7 @@ pub(super) fn expression(
     target: &ScratchTarget,
     input: Option<&Value>,
     variables: &HashMap<String, String>,
+    arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
     match input.and_then(parse_input) {
@@ -40,7 +41,7 @@ pub(super) fn expression(
         Some(InputValue::String(value)) => text_literal(value),
         Some(InputValue::VariableReference(reference)) => variables
             .get(reference.id)
-            .map(|name| format!("{name}.clone()"))
+            .map(|name| format!("&{name}"))
             .unwrap_or_else(|| unsupported_expression("unknown variable")),
         Some(InputValue::BlockReference(id)) => {
             if !active.insert(id.to_owned()) {
@@ -49,7 +50,7 @@ pub(super) fn expression(
             let result = target
                 .blocks
                 .get(id)
-                .map(|block| block_expression(target, block, variables, active))
+                .map(|block| block_expression(target, block, variables, arguments, active))
                 .unwrap_or_else(|| unsupported_expression(&format!("missing block: {id}")));
             active.remove(id);
             result
@@ -67,10 +68,11 @@ fn block_expression(
     target: &ScratchTarget,
     block: &ScratchBlock,
     variables: &HashMap<String, String>,
+    arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
     let input = |name: &str, active: &mut HashSet<String>| {
-        expression(target, block.inputs.get(name), variables, active)
+        expression(target, block.inputs.get(name), variables, arguments, active)
     };
     let binary = |function: &str, left: &str, right: &str, active: &mut HashSet<String>| {
         format!(
@@ -90,13 +92,13 @@ fn block_expression(
         "operator_lt" => binary("scratch_less_than", "OPERAND1", "OPERAND2", active),
         "operator_and" => format!(
             "scratch_and({}, {})",
-            boolean_input(target, block, "OPERAND1", variables, active),
-            boolean_input(target, block, "OPERAND2", variables, active)
+            boolean_input(target, block, "OPERAND1", variables, arguments, active),
+            boolean_input(target, block, "OPERAND2", variables, arguments, active)
         ),
         "operator_or" => format!(
             "scratch_or({}, {})",
-            boolean_input(target, block, "OPERAND1", variables, active),
-            boolean_input(target, block, "OPERAND2", variables, active)
+            boolean_input(target, block, "OPERAND1", variables, arguments, active),
+            boolean_input(target, block, "OPERAND2", variables, arguments, active)
         ),
         "operator_join" => binary("scratch_join", "STRING1", "STRING2", active),
         "operator_letter_of" => binary("scratch_letter", "LETTER", "STRING", active),
@@ -105,17 +107,30 @@ fn block_expression(
         "operator_round" => format!("scratch_round({})", input("NUM", active)),
         "operator_not" => format!(
             "scratch_not({})",
-            boolean_input(target, block, "OPERAND", variables, active)
+            boolean_input(target, block, "OPERAND", variables, arguments, active)
         ),
         "operator_random" => format!(
             "scratch_random({}, {})",
-            random_argument(target, block.inputs.get("FROM"), variables, active),
-            random_argument(target, block.inputs.get("TO"), variables, active)
+            random_argument(
+                target,
+                block.inputs.get("FROM"),
+                variables,
+                arguments,
+                active,
+            ),
+            random_argument(target, block.inputs.get("TO"), variables, arguments, active,)
         ),
-        "operator_mathop" => math_expression(target, block, variables, active),
+        "operator_mathop" => math_expression(target, block, variables, arguments, active),
         "data_variable" => variable_field(block, "VARIABLE", variables)
-            .map(|name| format!("{name}.clone()"))
+            .map(|name| format!("&{name}"))
             .unwrap_or_else(|| unsupported_expression("missing variable reference")),
+        "argument_reporter_string_number" | "argument_reporter_boolean" => {
+            field_value(block, "VALUE")
+                .and_then(Value::as_str)
+                .and_then(|name| arguments.get(name))
+                .map(|name| format!("&{name}"))
+                .unwrap_or_else(|| unsupported_expression("missing procedure argument"))
+        }
         "math_number"
         | "math_integer"
         | "math_whole_number"
@@ -135,9 +150,16 @@ fn math_expression(
     target: &ScratchTarget,
     block: &ScratchBlock,
     variables: &HashMap<String, String>,
+    arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
-    let value = expression(target, block.inputs.get("NUM"), variables, active);
+    let value = expression(
+        target,
+        block.inputs.get("NUM"),
+        variables,
+        arguments,
+        active,
+    );
     let numeric = numeric_literal(target, block.inputs.get("NUM"))
         .map(|literal| {
             if literal.starts_with('-') {
@@ -200,6 +222,7 @@ fn random_argument(
     target: &ScratchTarget,
     input: Option<&Value>,
     variables: &HashMap<String, String>,
+    arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
     match input.and_then(parse_input) {
@@ -207,10 +230,10 @@ fn random_argument(
             .as_str()
             .map(|text| quote(text))
             .or_else(|| value.as_number().map(|number| quote(&number.to_string())))
-            .unwrap_or_else(|| expression(target, input, variables, active)),
+            .unwrap_or_else(|| expression(target, input, variables, arguments, active)),
         Some(InputValue::BlockReference(id)) => {
             let Some(block) = target.blocks.get(id) else {
-                return expression(target, input, variables, active);
+                return expression(target, input, variables, arguments, active);
             };
             if matches!(
                 block.opcode.as_str(),
@@ -229,9 +252,9 @@ fn random_argument(
                     }
                 }
             }
-            expression(target, input, variables, active)
+            expression(target, input, variables, arguments, active)
         }
-        _ => expression(target, input, variables, active),
+        _ => expression(target, input, variables, arguments, active),
     }
 }
 
@@ -241,15 +264,35 @@ fn unsupported_expression(reason: &str) -> String {
 }
 
 // lower a boolean socket, using false when the Scratch socket is empty.
-fn boolean_input(
+pub(super) fn boolean_input(
     target: &ScratchTarget,
     block: &ScratchBlock,
     name: &str,
     variables: &HashMap<String, String>,
+    arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
     match block.inputs.get(name).and_then(parse_input) {
         Some(InputValue::Empty) | None => "false".to_owned(),
-        Some(_) => expression(target, block.inputs.get(name), variables, active),
+        Some(InputValue::BlockReference(id))
+            if target.blocks.get(id).is_some_and(|reporter| {
+                matches!(
+                    reporter.opcode.as_str(),
+                    "operator_equals"
+                        | "operator_gt"
+                        | "operator_lt"
+                        | "operator_and"
+                        | "operator_or"
+                        | "operator_not"
+                        | "operator_contains"
+                )
+            }) =>
+        {
+            expression(target, block.inputs.get(name), variables, arguments, active)
+        }
+        Some(_) => format!(
+            "scratch_bool({})",
+            expression(target, block.inputs.get(name), variables, arguments, active)
+        ),
     }
 }

@@ -46,7 +46,7 @@ functions below. This is the interface generated modules use:
 ```rust
 pub use operators::*;
 pub use random::{ScratchRandom, scratch_random};
-pub use value::ScratchValue;
+pub use value::{ScratchInput, ScratchValue, ScratchValueView};
 ```
 
 ## Values
@@ -63,13 +63,14 @@ pub enum ScratchValue {
 
 The runtime implements `From<f64>`, `From<bool>`, `From<&str>`, and
 `From<String>`. Generated variables are declared as `ScratchValue`; numbers,
-strings, and booleans are converted with `.into()`. Reporter expressions are
-passed directly to the helpers, which accept `impl Into<ScratchValue>`.
+strings, and booleans are converted with `.into()`. Operator helpers accept
+`impl ScratchInput`, which supports literals and both owned and borrowed
+`ScratchValue`s. Generated variable reporters pass references so operators
+can inspect text without cloning its `String`.
 
 ## Operator helpers
 
-Every argument listed as `Value` below has the Rust type
-`impl Into<ScratchValue>`.
+Every argument listed as `Value` below has the Rust type `impl ScratchInput`.
 
 | Helper | Signature result | Scratch operation |
 | --- | --- | --- |
@@ -124,6 +125,12 @@ The generator currently lowers:
 - Event hats: green flag, sprite clicked, stage clicked, key pressed, and
   broadcast received. Their statement chains are emitted sequentially.
 - Variable statements: `data_setvariableto` and `data_changevariableby`.
+- Custom procedure definitions and calls. Definitions become Rust functions;
+  calls pass dynamic Scratch arguments and mutable references to the variables
+  used by the procedure body.
+- Loop statements: `control_repeat`, `control_repeat_until`, and
+  `control_while`. Their substacks are lowered recursively; repeat counts use
+  Scratch rounding, and boolean conditions are converted using Scratch truth rules.
 - `looks_say` statements: emitted as `print_value!(name, expression)` at the same
   point in the script. For variable reporters, the macro prints the Scratch
   variable name and its value using Rust `Debug` formatting.
@@ -154,8 +161,13 @@ available when a repeatable sequence is needed.
 
 An unsupported reporter or malformed input emits a typed `todo!()` expression;
 an unsupported statement emits `todo!()` as a statement. These compile, but
-panic if execution reaches them. Lists, procedures, control flow, and other
-non-variable statements are not yet lowered by this Rust generator.
+panic if execution reaches them. Lists and control blocks other than the listed
+loops are not yet lowered by this Rust generator.
+
+Custom block definitions are emitted as Rust functions with `ScratchValue`
+arguments and mutable references for Scratch variables used by their bodies.
+Procedure call blocks invoke those functions. The functions are only emitted
+when the Scratch project defines them.
 
 The separate AIDA text generator remains available for `.aida` output. Its
 block coverage does not imply equivalent Rust lowering.

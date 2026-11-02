@@ -23,15 +23,21 @@ use crate::parser::ScratchProject;
 
 use super::{
     literals::{line, literal},
-    scripts::generate_scripts,
+    scripts::{generate_procedures, generate_scripts},
 };
 
 /// generate the module header, saved variable declarations, and target scripts.
 pub fn generate(project: &ScratchProject) -> String {
     let variables = allocate_variables(project);
     let mut output = String::from(
-        "#[allow(unused_imports)]\nuse crate::runtime::{\n    scratch_acos_degrees, scratch_add, scratch_and, scratch_asin_degrees, scratch_atan_degrees,\n    scratch_contains, scratch_cos, scratch_divide, scratch_equals, scratch_greater_than,\n    scratch_join, scratch_length, scratch_less_than, scratch_letter, scratch_mod, scratch_multiply,\n    scratch_not, scratch_or, scratch_random, scratch_round, scratch_sin, scratch_subtract,\n    scratch_tan, scratch_to_number, ScratchValue,\n};\n\n#[allow(unused_macros)]\nmacro_rules! print_value {\n    ($name:expr, $value:expr) => {\n        println!(\"{}: {:?}\", $name, $value);\n    };\n}\n\n#[allow(unused_mut, unused_variables, unused_assignments)]\npub fn run() {\n",
+        "#[allow(unused_imports)]\nuse crate::runtime::{\n    scratch_acos_degrees, scratch_add, scratch_and, scratch_asin_degrees, scratch_atan_degrees,\n    scratch_bool, scratch_contains, scratch_cos, scratch_divide, scratch_equals,\n    scratch_greater_than, scratch_join, scratch_length, scratch_less_than, scratch_letter,\n    scratch_mod, scratch_multiply, scratch_not, scratch_or, scratch_random, scratch_round,\n    scratch_sin, scratch_subtract, scratch_tan, scratch_to_number, ScratchValue,\n};\n\n#[allow(unused_macros)]\nmacro_rules! print_value {\n    ($name:expr, $value:expr) => {\n        println!(\"{}: {:?}\", $name, $value);\n    };\n}\n\n",
     );
+
+    for target in &project.targets {
+        generate_procedures(target, &variables, &mut output);
+    }
+
+    output.push_str("#[allow(unused_mut, unused_variables, unused_assignments)]\npub fn run() {\n");
 
     for target in &project.targets {
         let mut declarations: Vec<_> = target.variables.iter().collect();
@@ -89,7 +95,7 @@ fn allocate_variables(project: &ScratchProject) -> HashMap<String, String> {
 }
 
 // convert a Scratch variable name into a valid Rust identifier.
-fn rust_identifier(name: &str) -> String {
+pub(super) fn rust_identifier(name: &str) -> String {
     let mut output = String::new();
     for (index, character) in name.chars().enumerate() {
         if character.is_ascii_alphanumeric() || character == '_' {
