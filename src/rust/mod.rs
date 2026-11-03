@@ -144,6 +144,40 @@ mod tests {
     }
 
     #[test]
+    fn say_think_fixture_generates_bubbles_and_timed_waits() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/say-think.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("state.set_speech_bubble(BubbleKind::Say"));
+        assert!(output.contains("state.set_speech_bubble(BubbleKind::Think"));
+        assert!(output.contains("return ScriptStatus::WaitUntil(wait_deadline);"));
+        assert!(output.contains("self.state.expire_speech_bubbles(self.scheduler.now_millis());"));
+        for opcode in [
+            "looks_say",
+            "looks_sayforsecs",
+            "looks_think",
+            "looks_thinkforsecs",
+        ] {
+            assert!(!output.contains(&format!("unsupported statement: {opcode}")));
+        }
+    }
+
+    #[test]
+    fn consecutive_timed_think_blocks_resume_at_each_block_and_reach_following_work() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/think.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("\n                1 => {\n                    let scratch_bubble_text"));
+        assert!(output.contains("\n                2 => {\n                    let scratch_bubble_text"));
+        assert!(output.contains("\n                3 => {\n                    let scratch_change"));
+        assert!(output.contains("state.change_shared(0, scratch_change);"));
+    }
+
+    #[test]
     fn generated_program_exposes_tick_redraw_and_input_state_to_compiled_code() {
         let project = parse_project(
             &json!({
@@ -702,7 +736,7 @@ mod tests {
             output.contains("if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }")
         );
         assert!(output.contains("_ => { script.frames.pop(); continue; }"));
-        assert!(output.contains("print_value!(state, \"say\", \"returned\");"));
+        assert!(output.contains("print_value!(state, \"say\", scratch_bubble_text.clone());"));
     }
 
     #[test]

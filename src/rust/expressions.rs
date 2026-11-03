@@ -221,6 +221,7 @@ fn block_expression(
         "sensing_mousedown" => "state.mouse_down()".to_owned(),
         "sensing_mousex" => "state.mouse_x()".to_owned(),
         "sensing_mousey" => "state.mouse_y()".to_owned(),
+        "sensing_timer" => "clock.now_millis() as f64 / 1000.0".to_owned(),
         "data_listcontainsitem" => list_field(block, "LIST", lists)
             .map(|list| {
                 format!(

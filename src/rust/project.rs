@@ -83,6 +83,17 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
             )
         })
     });
+    let uses_timed_speech = project.targets.iter().any(|target| {
+        target
+            .blocks
+            .values()
+            .any(|block| matches!(block.opcode.as_str(), "looks_sayforsecs" | "looks_thinkforsecs"))
+    });
+    let expire_bubbles = if uses_timed_speech {
+        "self.state.expire_speech_bubbles(self.scheduler.now_millis()); "
+    } else {
+        ""
+    };
     let mut output = String::new();
 
     generate_green_flag_functions(project, &variables, &lists, fast_math, &mut output);
@@ -195,9 +206,9 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     }
     output.push_str(" }\n");
     if uses_broadcasts || uses_clones {
-        output.push_str("    pub fn advance_frame(&mut self) -> SchedulerStatus { self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut next_new_id = self.scheduler.next_script_id(); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() { let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) { if status == SchedulerStatus::Complete { return status; } progressed = true; self.process_after_step(); if self.scheduler.next_script_id() != next_new_id { self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id); next_new_id = self.scheduler.next_script_id(); } } } if progressed { SchedulerStatus::Progressed } else { self.scheduler.idle_status() } }\n");
+        output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {expire_bubbles}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut next_new_id = self.scheduler.next_script_id(); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return status; }} progressed = true; self.process_after_step(); if self.scheduler.next_script_id() != next_new_id {{ self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id); next_new_id = self.scheduler.next_script_id(); }} }} }} if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }} }}\n"));
     } else {
-        output.push_str("    pub fn advance_frame(&mut self) -> SchedulerStatus { self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() { let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) { if status == SchedulerStatus::Complete { return status; } progressed = true; } } if progressed { SchedulerStatus::Progressed } else { self.scheduler.idle_status() } }\n");
+        output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {expire_bubbles}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return status; }} progressed = true; }} }} if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }} }}\n"));
     }
     output.push_str("    pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }\n");
     output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }\n");
@@ -231,6 +242,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
 
 fn runtime_imports(identifiers: &HashSet<String>) -> String {
     const IMPORTS: &[&str] = &[
+        "BubbleKind",
         "scratch_acos_degrees",
         "fast_acos_degrees",
         "fast_asin_degrees",

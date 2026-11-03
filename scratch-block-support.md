@@ -16,7 +16,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **190 block cases + 4 procedure opcodes** | **63 implemented ✓, 31 partial -, 100 not implemented x** |
+| **Catalog** | **190 block cases + 4 procedure opcodes** | **67 implemented ✓, 31 partial -, 96 not implemented x** |
 
 ### Control
 
@@ -101,7 +101,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `looks_nextbackdrop` | ✓ | x |
 | `looks_nextcostume` | ✓ | x |
 | `looks_say` | ✓ | ✓ |
-| `looks_sayforsecs` | ✓ | x |
+| `looks_sayforsecs` | ✓ | ✓ |
 | `looks_seteffectto` | ✓ | x |
 | `looks_setsizeto` | ✓ | x |
 | `looks_setstretchto` | ✓ | x |
@@ -110,8 +110,8 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `looks_switchbackdropto` | ✓ | x |
 | `looks_switchbackdroptoandwait` | ✓ | x |
 | `looks_switchcostumeto` | ✓ | x |
-| `looks_think` | ✓ | x |
-| `looks_thinkforsecs` | ✓ | x |
+| `looks_think` | ✓ | ✓ |
+| `looks_thinkforsecs` | ✓ | ✓ |
 
 ### Motion
 
@@ -189,7 +189,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `sensing_of_object_menu` | ✓ | - |
 | `sensing_resettimer` | ✓ | x |
 | `sensing_setdragmode` | ✓ | x |
-| `sensing_timer` | ✓ | x |
+| `sensing_timer` | ✓ | ✓ |
 | `sensing_touchingcolor` | ✓ | x |
 | `sensing_touchingobject` | ✓ | x |
 | `sensing_touchingobjectmenu` | ✓ | - |

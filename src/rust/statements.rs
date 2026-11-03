@@ -1063,7 +1063,10 @@ fn is_straight_line_block(block: &ScratchBlock) -> bool {
     !block.opcode.starts_with("control_")
         && !matches!(
             block.opcode.as_str(),
-            "motion_glideto" | "motion_glidesecstoxy"
+            "motion_glideto"
+                | "motion_glidesecstoxy"
+                | "looks_sayforsecs"
+                | "looks_thinkforsecs"
         )
         && block.opcode != "procedures_call"
         && block.opcode != "event_broadcast"
@@ -1475,7 +1478,7 @@ fn generate_resumable_statement(
                 line(output, indent, "todo!(\"missing variable reference\");");
             }
         }
-        "looks_say" => {
+        "looks_say" | "looks_think" => {
             let value = expression(
                 target,
                 block.inputs.get("MESSAGE"),
@@ -1484,14 +1487,80 @@ fn generate_resumable_statement(
                 arguments,
                 &mut HashSet::new(),
             );
-            let name = say_variable_name(target, block.inputs.get("MESSAGE"))
-                .unwrap_or_else(|| "say".to_owned());
             line(
                 output,
                 indent,
-                &format!("print_value!(state, {}, {value});", quote(&name)),
+                &format!("let scratch_bubble_text = scratch_string({value});"),
             );
-            line(output, indent, "state.request_redraw();");
+            if block.opcode == "looks_say" {
+                let name = say_variable_name(target, block.inputs.get("MESSAGE"))
+                    .unwrap_or_else(|| "say".to_owned());
+                line(
+                    output,
+                    indent,
+                    &format!("print_value!(state, {}, scratch_bubble_text.clone());", quote(&name)),
+                );
+            }
+            line(
+                output,
+                indent,
+                &format!(
+                    "state.set_speech_bubble(BubbleKind::{}, scratch_bubble_text, None);",
+                    if block.opcode == "looks_say" { "Say" } else { "Think" }
+                ),
+            );
+        }
+        "looks_sayforsecs" | "looks_thinkforsecs" => {
+            let value = expression(
+                target,
+                block.inputs.get("MESSAGE"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            let duration = expression(
+                target,
+                block.inputs.get("SECS"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(output, indent, &format!("let scratch_bubble_text = scratch_string({value});"));
+            if block.opcode == "looks_sayforsecs" {
+                let name = say_variable_name(target, block.inputs.get("MESSAGE"))
+                    .unwrap_or_else(|| "say".to_owned());
+                line(
+                    output,
+                    indent,
+                    &format!("print_value!(state, {}, scratch_bubble_text.clone());", quote(&name)),
+                );
+            }
+            line(
+                output,
+                indent,
+                &format!(
+                    "let duration_ms = (scratch_to_number({duration}).max(0.0) * 1000.0).ceil() as u64; let wait_deadline = clock.now_millis().saturating_add(duration_ms);"
+                ),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "state.set_speech_bubble(BubbleKind::{}, scratch_bubble_text, Some(wait_deadline));",
+                    if block.opcode == "looks_sayforsecs" { "Say" } else { "Think" }
+                ),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    pc_literal(next_pc)
+                ),
+            );
+            line(output, indent, "return ScriptStatus::WaitUntil(wait_deadline);");
         }
         "motion_gotoxy" => {
             let x = expression(
