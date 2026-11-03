@@ -821,7 +821,10 @@ fn generate_native_numeric_loop(
         line(
             output,
             5,
-            &format!("let mut scratch_local_{slot} = scratch_to_number(state.get({slot}));"),
+            &format!(
+                "let mut scratch_local_{slot} = scratch_to_number({});",
+                variable_read_for_slot(variables, *slot)
+            ),
         );
     }
     line(
@@ -869,11 +872,11 @@ fn generate_native_numeric_loop(
             7,
             &format!("script.frames.last_mut().unwrap().pc = {pc};"),
         );
-        generate_local_commits(plan, output, 7);
+        generate_local_commits(plan, variables, output, 7);
         line(output, 7, "return ScriptStatus::Yield;");
         line(output, 6, "}");
         line(output, 5, "}");
-        generate_local_commits(plan, output, 5);
+        generate_local_commits(plan, variables, output, 5);
         line(
             output,
             5,
@@ -959,12 +962,12 @@ fn generate_native_repeat_loop(
             pc_literal(next_pc)
         ),
     );
-    generate_local_commits(plan, output, 7);
+    generate_local_commits(plan, variables, output, 7);
     line(output, 7, "return ScriptStatus::Yield;");
     line(output, 6, "}");
     line(output, 6, "if repeat_remaining == 0 { break; }");
     line(output, 5, "}");
-    generate_local_commits(plan, output, 5);
+    generate_local_commits(plan, variables, output, 5);
     line(
         output,
         5,
@@ -1019,14 +1022,39 @@ fn generate_native_numeric_body(
     }
 }
 
-fn generate_local_commits(plan: &NumericLoopPlan, output: &mut String, indent: usize) {
+fn generate_local_commits(
+    plan: &NumericLoopPlan,
+    variables: &HashMap<String, VariableInfo>,
+    output: &mut String,
+    indent: usize,
+) {
     for slot in &plan.written_slots {
         line(
             output,
             indent,
-            &format!("state.set({slot}, scratch_local_{slot}.into());"),
+            &variable_write_for_slot(variables, *slot, &format!("scratch_local_{slot}.into()")),
         );
     }
+}
+
+fn variable_read_for_slot(variables: &HashMap<String, VariableInfo>, slot: usize) -> String {
+    variables
+        .values()
+        .find(|variable| variable.slot == slot)
+        .map(VariableInfo::read_expression)
+        .unwrap_or_else(|| format!("state.get({slot})"))
+}
+
+fn variable_write_for_slot(
+    variables: &HashMap<String, VariableInfo>,
+    slot: usize,
+    value: &str,
+) -> String {
+    variables
+        .values()
+        .find(|variable| variable.slot == slot)
+        .map(|variable| variable.write_statement(value))
+        .unwrap_or_else(|| format!("state.set({slot}, {value});"))
 }
 
 fn is_straight_line_block(block: &ScratchBlock) -> bool {
@@ -1345,7 +1373,7 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!("state.set({}, scratch_new_value);", variable.slot),
+                    &variable.write_statement("scratch_new_value"),
                 );
             } else {
                 line(output, indent, "todo!(\"missing variable reference\");");
@@ -1365,14 +1393,14 @@ fn generate_resumable_statement(
                     output,
                     indent,
                     &format!(
-                        "let scratch_new_value: ScratchValue = scratch_add(state.get({}), {value}).into();",
-                        variable.slot
+                        "let scratch_new_value: ScratchValue = scratch_add({}, {value}).into();",
+                        variable.read_expression()
                     ),
                 );
                 line(
                     output,
                     indent,
-                    &format!("state.set({}, scratch_new_value);", variable.slot),
+                    &variable.write_statement("scratch_new_value"),
                 );
             } else {
                 line(output, indent, "todo!(\"missing variable reference\");");
@@ -1488,12 +1516,12 @@ fn variable_input(
     match input.and_then(parse_input)? {
         InputValue::VariableReference(reference) => variables
             .get(reference.id)
-            .map(|variable| format!("state.get({})", variable.slot)),
+            .map(VariableInfo::read_expression),
         InputValue::BlockReference(id) => {
             let reporter = target.blocks.get(id)?;
             if reporter.opcode == "data_variable" {
                 variable_field(reporter, "VARIABLE", variables)
-                    .map(|variable| format!("state.get({})", variable.slot))
+                    .map(|variable| variable.read_expression())
             } else if matches!(
                 reporter.opcode.as_str(),
                 "argument_reporter_string_number" | "argument_reporter_boolean"

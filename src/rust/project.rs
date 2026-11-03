@@ -38,6 +38,18 @@ pub(super) struct VariableInfo {
     pub(super) non_nan: bool,
 }
 
+impl VariableInfo {
+    pub(super) fn read_expression(&self) -> String {
+        let method = if self.is_stage { "get_shared" } else { "get" };
+        format!("state.{method}({})", self.slot)
+    }
+
+    pub(super) fn write_statement(&self, value: &str) -> String {
+        let method = if self.is_stage { "set_shared" } else { "set" };
+        format!("state.{method}({}, {value});", self.slot)
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct ListInfo {
     pub(super) slot: usize,

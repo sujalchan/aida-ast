@@ -64,7 +64,7 @@ pub(super) fn expression(
         Some(InputValue::String(value)) => text_literal(value),
         Some(InputValue::VariableReference(reference)) => variables
             .get(reference.id)
-            .map(|variable| format!("state.get({})", variable.slot))
+            .map(VariableInfo::read_expression)
             .unwrap_or_else(|| unsupported_expression("unknown variable")),
         Some(InputValue::BlockReference(id)) => {
             if !active.insert(id.to_owned()) {
@@ -173,7 +173,7 @@ fn block_expression(
         ),
         "operator_mathop" => math_expression(target, block, variables, lists, arguments, active),
         "data_variable" => variable_field(block, "VARIABLE", variables)
-            .map(|variable| format!("state.get({})", variable.slot))
+            .map(|variable| variable.read_expression())
             .unwrap_or_else(|| unsupported_expression("missing variable reference")),
         "data_listcontents" => list_field(block, "LIST", lists)
             .map(|list| format!("state.list({}).contents()", list.slot))

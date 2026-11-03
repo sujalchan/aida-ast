@@ -721,7 +721,7 @@ mod tests {
         assert!(output.contains(
             "ScratchVariableMetadata::for_target(\"sprite_score_id\", \"score\", \"Sprite1\", 1, false)"
         ));
+        assert!(output.contains("state.set_shared(1, scratch_new_value);"));
         assert!(output.contains("state.set(0, scratch_new_value);"));
-        assert!(output.contains("state.set(1, scratch_new_value);"));
     }
 }
