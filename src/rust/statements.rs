@@ -39,14 +39,12 @@ struct ScriptGraph {
     boundary_pcs: HashMap<String, usize>,
     fallthrough_pcs: HashMap<String, usize>,
     repeat_slots: HashMap<String, usize>,
-    wait_slots: HashMap<String, usize>,
 }
 
 struct ProcedureEntry {
     function_id: usize,
     start_pc: usize,
     repeat_count: usize,
-    wait_count: usize,
 }
 
 enum ScriptNode {
@@ -62,7 +60,6 @@ impl ScriptGraph {
             boundary_pcs: HashMap::new(),
             fallthrough_pcs: HashMap::new(),
             repeat_slots: HashMap::new(),
-            wait_slots: HashMap::new(),
         }
     }
 
@@ -79,10 +76,6 @@ impl ScriptGraph {
             let pc = self.nodes.len();
             self.block_pcs.insert(id.to_owned(), pc);
             self.nodes.push(ScriptNode::Block(id.to_owned()));
-            if block.opcode == "control_wait" {
-                let slot = self.wait_slots.len();
-                self.wait_slots.insert(id.to_owned(), slot);
-            }
             let next = block.next.as_deref();
             self.fallthrough_pcs.insert(id.to_owned(), continuation);
 
@@ -151,7 +144,7 @@ pub(super) fn generate_resumable_script(
     function_name: &str,
     fast_math: bool,
     output: &mut String,
-) -> (usize, usize, usize) {
+) -> (usize, usize) {
     let mut graph = ScriptGraph::new();
     graph.add_chain(target, first, usize::MAX);
     let start_pc = first
@@ -176,7 +169,6 @@ pub(super) fn generate_resumable_script(
                 function_id: procedure.frame_id,
                 start_pc: procedure_start,
                 repeat_count: procedure_graph.repeat_slots.len(),
-                wait_count: procedure_graph.wait_slots.len(),
             },
         );
         procedure_graphs.push((procedure, procedure_graph));
@@ -284,7 +276,7 @@ pub(super) fn generate_resumable_script(
     line(output, 2, "}");
     line(output, 1, "}");
     line(output, 0, "}\n");
-    (start_pc, graph.repeat_slots.len(), graph.wait_slots.len())
+    (start_pc, graph.repeat_slots.len())
 }
 
 fn generate_resumable_block(
@@ -522,48 +514,12 @@ fn generate_resumable_block(
                 arguments,
                 &mut HashSet::new(),
             );
-            let slot = graph.wait_slots[id];
             line(
                 output,
                 indent + 1,
                 &format!(
-                    "let wait_started = script.frames.last().unwrap().wait_deadlines[{slot}].is_none();"
+                    "let duration_ms = (scratch_to_number({duration}).max(0.0) * 1000.0).ceil() as u64; let wait_deadline = clock.now_millis().saturating_add(duration_ms);"
                 ),
-            );
-            line(
-                output,
-                indent + 1,
-                &format!(
-                    "let wait_deadline = if let Some(deadline) = script.frames.last().unwrap().wait_deadlines[{slot}] {{ deadline }} else {{ let duration_ms = (scratch_to_number({duration}).max(0.0) * 1000.0).ceil() as u64; let deadline = clock.now_millis().saturating_add(duration_ms); script.frames.last_mut().unwrap().wait_deadlines[{slot}] = Some(deadline); deadline }};"
-                ),
-            );
-            line(output, indent + 1, "if wait_started {");
-            line(
-                output,
-                indent + 2,
-                &format!("script.frames.last_mut().unwrap().pc = {pc};"),
-            );
-            line(
-                output,
-                indent + 2,
-                "return ScriptStatus::WaitUntil(wait_deadline);",
-            );
-            line(output, indent + 1, "}");
-            line(
-                output,
-                indent + 1,
-                "if clock.now_millis() < wait_deadline {",
-            );
-            line(
-                output,
-                indent + 2,
-                "return ScriptStatus::WaitUntil(wait_deadline);",
-            );
-            line(output, indent + 1, "}");
-            line(
-                output,
-                indent + 1,
-                &format!("script.frames.last_mut().unwrap().wait_deadlines[{slot}] = None;"),
             );
             line(
                 output,
@@ -573,7 +529,11 @@ fn generate_resumable_block(
                     pc_literal(next_pc)
                 ),
             );
-            line(output, indent + 1, "continue;");
+            line(
+                output,
+                indent + 1,
+                "return ScriptStatus::WaitUntil(wait_deadline);",
+            );
         }
         "procedures_call" => generate_resumable_procedure_call(
             target,
@@ -1213,11 +1173,10 @@ fn generate_resumable_procedure_call(
         output,
         indent,
         &format!(
-            "script.frames.push(ProcedureFrame {{ function: {}, pc: {}, repeat_counts: vec![0; {}], wait_deadlines: vec![None; {}], arguments: vec![{}], warp_mode: inherited_warp || {} }});",
+            "script.frames.push(ProcedureFrame {{ function: {}, pc: {}, repeat_counts: vec![0; {}], arguments: vec![{}], warp_mode: inherited_warp || {} }});",
             entry.function_id,
             pc_literal(entry.start_pc),
             entry.repeat_count,
-            entry.wait_count,
             values.join(", "),
             inherited_warp
         ),

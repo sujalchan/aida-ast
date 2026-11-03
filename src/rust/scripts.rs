@@ -74,7 +74,7 @@ pub(super) fn generate_green_flag_functions(
         ),
     );
 
-    output.push_str("#[allow(dead_code)]\nstruct ProcedureFrame { function: usize, pc: usize, repeat_counts: Vec<usize>, wait_deadlines: Vec<Option<u64>>, arguments: Vec<ScratchValue>, warp_mode: bool }\n");
+    output.push_str("#[allow(dead_code)]\nstruct ProcedureFrame { function: usize, pc: usize, repeat_counts: Vec<usize>, arguments: Vec<ScratchValue>, warp_mode: bool }\n");
     output
         .push_str("struct ScriptState { frames: Vec<ProcedureFrame>, __WARP_BUDGET_FIELD__ }\n\n");
     line(output, 0, "enum GeneratedScript {");
@@ -139,7 +139,7 @@ pub(super) fn generate_green_flag_functions(
 
     for script in &scripts {
         let procedures = procedure_signatures(script.target);
-        let (start_pc, loop_count, wait_count) = generate_resumable_script(
+        let (start_pc, loop_count) = generate_resumable_script(
             script.target,
             script.hat.next.as_deref(),
             variables,
@@ -153,7 +153,7 @@ pub(super) fn generate_green_flag_functions(
             output,
             0,
             &format!(
-                "fn new_{}_for(instance: usize) -> GeneratedScript {{ GeneratedScript::{}(instance, ScriptState {{ frames: vec![ProcedureFrame {{ function: 0, pc: {}, repeat_counts: vec![0; {loop_count}], wait_deadlines: vec![None; {wait_count}], arguments: vec![], warp_mode: false }}], __WARP_BUDGET_INIT__ }}) }}\n",
+                "fn new_{}_for(instance: usize) -> GeneratedScript {{ GeneratedScript::{}(instance, ScriptState {{ frames: vec![ProcedureFrame {{ function: 0, pc: {}, repeat_counts: vec![0; {loop_count}], arguments: vec![], warp_mode: false }}], __WARP_BUDGET_INIT__ }}) }}\n",
                 script.function,
                 script.variant,
                 if start_pc == usize::MAX {

@@ -637,7 +637,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_block_keeps_its_deadline_in_the_active_procedure_frame() {
+    fn wait_in_custom_block_advances_its_frame_before_scheduler_suspension() {
         let project = parse_project(
             &json!({
                 "targets": [{
@@ -657,10 +657,11 @@ mod tests {
         ).unwrap();
 
         let output = generate(&project);
-        assert!(output.contains("wait_deadlines: vec![None; 1]"));
+        assert!(!output.contains("wait_deadlines"));
+        assert!(output.contains("script.frames.last_mut().unwrap().pc = 1;"));
         assert!(output.contains("ScriptStatus::WaitUntil(wait_deadline)"));
         assert!(output.contains("clock.now_millis().saturating_add(duration_ms)"));
-        assert!(output.contains("wait_deadlines[0] = None"));
+        assert!(!output.contains("clock.now_millis() < wait_deadline"));
         assert!(output.contains("warp_mode: inherited_warp || true"));
         assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
         assert!(!output.contains("if script.warp_budget_expired(clock) { return ScriptStatus::Yield; }\n                            continue;"));
