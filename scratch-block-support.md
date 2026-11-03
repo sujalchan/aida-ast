@@ -1,8 +1,8 @@
 # Scratch block support
 
-This is a snapshot of AIDA's Scratch 3 block support. The inventory contains the 176 concrete opcodes in [`src/aida/block_cases.tsv`](../src/aida/block_cases.tsv) plus the four custom-procedure opcodes covered by procedure tests. It includes core blocks, editor menus and literals, legacy opcodes, AIDA's listed extension examples, and Pen blocks. It does not attempt to list third-party extension opcodes that are not in this repository's catalog.
+This is a snapshot of AIDA's Scratch 3 block support. The inventory contains the 176 concrete opcodes in [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv) plus the four custom-procedure opcodes covered by procedure tests. It includes core blocks, editor menus and literals, legacy opcodes, AIDA's listed extension examples, and Pen blocks. It does not attempt to list third-party extension opcodes that are not in this repository's catalog.
 
-The opcode inventory follows Scratch VM's standard block packages: [control](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_control.js), [data](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_data.js), [events](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_event.js), [looks](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_looks.js), [motion](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_motion.js), [operators](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_operators.js), [procedures](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_procedures.js), [sensing](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sensing.js), and [sound](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sound.js). AIDA's explicit text mappings are in [`src/aida/blocks.rs`](../src/aida/blocks.rs); control-flow and procedure rendering is also implemented in [`src/aida.rs`](../src/aida.rs) and [`src/aida/procedures.rs`](../src/aida/procedures.rs).
+The opcode inventory follows Scratch VM's standard block packages: [control](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_control.js), [data](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_data.js), [events](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_event.js), [looks](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_looks.js), [motion](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_motion.js), [operators](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_operators.js), [procedures](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_procedures.js), [sensing](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sensing.js), and [sound](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sound.js). AIDA's explicit text mappings are in [`src/aida/blocks.rs`](src/aida/blocks.rs); control-flow and procedure rendering is also implemented in [`src/aida.rs`](src/aida.rs) and [`src/aida/procedures.rs`](src/aida/procedures.rs).
 
 ## Status key
 
@@ -10,11 +10,13 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 - **-**: AIDA renders the block, but Rust support is structural, partial, or compile-time only. This includes menu blocks, event hats that are not started by the runtime, and list visibility without a visual monitor.
 - **x**: the Rust runtime backend has no implementation; generated code reaches an unsupported-block placeholder if the block executes.
 
-`AIDA text output` is a translation format, not an execution engine. A check in that column means the block has a text representation; it does not imply Scratch VM-equivalent runtime behavior. Runtime status is based on the generated Rust implementation in [`src/rust/expressions.rs`](../src/rust/expressions.rs), [`src/rust/statements.rs`](../src/rust/statements.rs), and [`src/rust/scripts.rs`](../src/rust/scripts.rs). These marks describe implemented code paths, not a guarantee of parity for every Scratch edge case.
+`AIDA text output` is a translation format, not an execution engine. A check in that column means the block has a text representation; it does not imply Scratch VM-equivalent runtime behavior. Runtime status is based on the generated Rust implementation in [`src/rust/expressions.rs`](src/rust/expressions.rs), [`src/rust/statements.rs`](src/rust/statements.rs), and [`src/rust/scripts.rs`](src/rust/scripts.rs). These marks describe implemented code paths, not a guarantee of parity for every Scratch edge case.
+
+Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `event_whenbroadcastreceived`. The scheduler starts matching receivers, restarts an already active receiver when the same message is sent again, and waits for the started receiver runs for broadcast-and-wait. Matching receivers are created for live clones too; deleting a clone removes its scripts and releases senders waiting for them. The `broadcast-test.sb3` fixture exercises these paths, including a receiver that calls a waiting custom block. Other event hats remain partial when the headless runtime has no source for their events, such as keyboard and click input.
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **176 block cases + 4 procedure opcodes** | **52 implemented ✓, 33 partial -, 95 not implemented x** |
+| **Catalog** | **176 block cases + 4 procedure opcodes** | **56 implemented ✓, 32 partial -, 92 not implemented x** |
 
 ### Control
 
@@ -24,7 +26,7 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 | `control_clear_counter` | ✓ | x |
 | `control_create_clone_of` | ✓ | ✓ |
 | `control_create_clone_of_menu` | ✓ | - |
-| `control_delete_this_clone` | ✓ | x |
+| `control_delete_this_clone` | ✓ | ✓ |
 | `control_for_each` | ✓ | x |
 | `control_forever` | ✓ | ✓ |
 | `control_get_counter` | ✓ | x |
@@ -67,12 +69,12 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| `event_broadcast` | ✓ | x |
+| `event_broadcast` | ✓ | ✓ |
 | `event_broadcast_menu` | ✓ | - |
-| `event_broadcastandwait` | ✓ | x |
+| `event_broadcastandwait` | ✓ | ✓ |
 | `event_touchingobjectmenu` | ✓ | - |
 | `event_whenbackdropswitchesto` | ✓ | - |
-| `event_whenbroadcastreceived` | ✓ | - |
+| `event_whenbroadcastreceived` | ✓ | ✓ |
 | `event_whenflagclicked` | ✓ | ✓ |
 | `event_whengreaterthan` | ✓ | - |
 | `event_whenkeypressed` | ✓ | - |
