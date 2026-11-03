@@ -26,7 +26,7 @@ use crate::parser::{InputValue, ScratchBlock, ScratchTarget, parse_input};
 use super::{
     expressions::{
         LocalValueKind, boolean_input, collect_numeric_local_slots, constant_numeric_input,
-        expression, local_expression, local_to_bool, local_to_number,
+        expression, expression_argument, local_expression, local_to_bool, local_to_number,
     },
     literals::{field_value, line, quote},
     project::{ListInfo, VariableInfo},
@@ -529,6 +529,7 @@ fn generate_resumable_block(
                     pc_literal(next_pc)
                 ),
             );
+            line(output, indent + 1, "state.request_redraw();");
             line(
                 output,
                 indent + 1,
@@ -980,7 +981,11 @@ fn generate_native_numeric_body(
         let local = &locals[&variable.slot];
         if block.opcode == "data_setvariableto" {
             assert_eq!(value.kind, LocalValueKind::Number);
-            line(output, indent, &format!("{local} = {};", value.code));
+            line(
+                output,
+                indent,
+                &format!("{local} = {};", expression_argument(&value.code)),
+            );
         } else if let Some(constant) = variable
             .non_nan
             .then(|| {
@@ -991,12 +996,19 @@ fn generate_native_numeric_body(
         {
             line(output, indent, &format!("{local} += {constant:?}_f64;"));
         } else if fast_math && value.kind == LocalValueKind::Number {
-            line(output, indent, &format!("{local} += {};", value.code));
+            line(
+                output,
+                indent,
+                &format!("{local} += {};", expression_argument(&value.code)),
+            );
         } else {
             line(
                 output,
                 indent,
-                &format!("{local} = scratch_add({local}, {});", value.code),
+                &format!(
+                    "{local} = scratch_add({local}, {});",
+                    expression_argument(&value.code)
+                ),
             );
         }
     }
@@ -1463,8 +1475,9 @@ fn generate_resumable_statement(
             line(
                 output,
                 indent,
-                &format!("print_value!({}, {value});", quote(&name)),
+                &format!("print_value!(state, {}, {value});", quote(&name)),
             );
+            line(output, indent, "state.request_redraw();");
         }
         "motion_gotoxy" => {
             let x = expression(
@@ -1488,6 +1501,7 @@ fn generate_resumable_statement(
                 indent,
                 &format!("state.set_xy(scratch_to_number({x}), scratch_to_number({y}));"),
             );
+            line(output, indent, "state.request_redraw();");
         }
         "motion_changexby" => {
             let dx = expression(
@@ -1503,6 +1517,7 @@ fn generate_resumable_statement(
                 indent,
                 &format!("state.change_x_by(scratch_to_number({dx}));"),
             );
+            line(output, indent, "state.request_redraw();");
         }
         "control_create_clone_of" => {
             let option = block
@@ -1552,6 +1567,7 @@ fn generate_resumable_statement(
                 indent,
                 "if let (Some(target), Some(source)) = (clone_target, clone_source) { state.create_clone(source, target, 300); }",
             );
+            line(output, indent, "state.request_redraw();");
         }
         "control_delete_this_clone" => {
             line(
@@ -1559,6 +1575,7 @@ fn generate_resumable_statement(
                 indent,
                 "if state.delete_current_clone() { return ScriptStatus::Complete; }",
             );
+            line(output, indent, "state.request_redraw();");
         }
         "procedures_call" => line(
             output,

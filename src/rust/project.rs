@@ -204,12 +204,21 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         "    pub fn active_script_count(&self) -> usize { self.scheduler.active_scripts() }\n",
     );
     output.push_str("    pub fn state(&self) -> &ScratchState { &self.state }\n");
+    output.push_str("    pub fn begin_tick(&mut self) { self.state.begin_tick(); }\n");
+    output
+        .push_str("    pub fn redraw_requested(&self) -> bool { self.state.redraw_requested() }\n");
+    output.push_str(
+        "    pub fn presentation_consumed(&mut self) { self.state.presentation_consumed(); }\n",
+    );
+    output.push_str("    pub fn apply_input(&mut self, event: RuntimeInputEvent) { if let Some(key) = self.state.apply_input(event) { let scripts = new_keypress_scripts(&key, &self.state); self.scheduler.add_scripts(scripts); } }\n");
+    output.push_str("    pub fn observable_snapshot(&self, tick: usize) -> RuntimeSnapshot { self.state.observable_snapshot(tick) }\n");
+    output.push_str("    pub fn set_observable_event_sink(&mut self, sink: Option<std::sync::mpsc::Sender<ObservableEvent>>) { self.state.set_event_sink(sink); }\n");
     output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance_frame() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }\n}\n\n");
     output.push_str("#[allow(dead_code)]\npub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
     let identifiers = rust_identifiers(&output);
     let imports = runtime_imports(&identifiers);
     let print_value_macro = if identifiers.contains("print_value") {
-        "macro_rules! print_value {\n    ($name:expr, $value:expr) => {\n        println!(\"{}: {:?}\", $name, $value);\n    };\n}\n\n"
+        "macro_rules! print_value {\n    ($state:expr, $name:expr, $value:expr) => {{\n        let value = $value;\n        $state.emit_observable_output($name, &value);\n    }};\n}\n\n"
     } else {
         ""
     };
@@ -252,12 +261,15 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         "scratch_tan",
         "scratch_to_number",
         "Clock",
+        "ObservableEvent",
         "ResumableScript",
         "ScratchList",
         "ScratchListMetadata",
         "ScratchState",
         "ScratchValue",
         "ScratchVariableMetadata",
+        "RuntimeSnapshot",
+        "RuntimeInputEvent",
         "SchedulerStatus",
         "ScriptScheduler",
         "ScriptStatus",

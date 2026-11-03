@@ -45,14 +45,21 @@ fn target(blocks: Vec<(&str, ScratchBlock)>) -> ScratchTarget {
     ScratchTarget {
         name: "Sprite1".to_owned(),
         is_stage: false,
+        layer_order: 0,
         x: 0.0,
         y: 0.0,
+        direction: 90.0,
+        size: 100.0,
+        visible: true,
         blocks: blocks
             .into_iter()
             .map(|(id, block)| (id.to_owned(), block))
             .collect(),
         variables: Default::default(),
         lists: Default::default(),
+        costumes: vec![],
+        sounds: vec![],
+        current_costume: 0,
         broadcasts: Default::default(),
     }
 }
@@ -148,6 +155,7 @@ fn generates_green_flag_assignment_and_sorted_variables() {
         .insert("test-id".to_owned(), variable("test", json!(7)));
     let project = ScratchProject {
         targets: vec![stage, nested_target()],
+        monitors: vec![],
     };
     assert_eq!(
         generate(&project),
@@ -181,6 +189,7 @@ fn unknown_opcodes_are_visible_and_do_not_stop_the_script() {
             ("unsupported", unsupported),
             ("show", block("looks_show", &[])),
         ])],
+        monitors: vec![],
     };
     let output = generate(&project);
     assert!(output.contains("say unknown(\"extension_unknown_reporter\")\n"));
@@ -201,6 +210,7 @@ fn ignores_disconnected_reporters_and_unsupported_hats() {
             ("reporter", reporter),
             ("key", unsupported_hat),
         ])],
+        monitors: vec![],
     };
     assert_eq!(
         generate(&project),
@@ -303,6 +313,7 @@ fn follows_next_links_and_sorts_independent_scripts() {
         .insert("a-id".to_owned(), variable("zebra", json!(2)));
     let mut project = ScratchProject {
         targets: vec![target],
+        monitors: vec![],
     };
     let first = generate(&project);
     assert!(first.find("first script").unwrap() < first.find("            show").unwrap());
@@ -352,6 +363,7 @@ fn handles_missing_inputs_invalid_references_and_cycles() {
     }
     let mut project = ScratchProject {
         targets: vec![target],
+        monitors: vec![],
     };
     let output = generate(&project);
     assert_eq!(output.matches("            show\n").count(), 1);
@@ -391,6 +403,7 @@ fn generates_nested_control_bodies_and_then_continues() {
             ),
             ("say", block("looks_say", &[("MESSAGE", text("done"))])),
         ])],
+        monitors: vec![],
     };
     assert!(generate(&project).contains(concat!(
         "            repeat 2 {\n",
@@ -429,6 +442,7 @@ fn resolves_variable_ids_and_normalizes_numeric_string_initializers() {
     }
     let output = generate(&ScratchProject {
         targets: vec![stage, sprite],
+        monitors: vec![],
     });
     assert!(output.contains("cloud var: global_name = 7"));
     assert!(output.contains("var: local_name = false"));
@@ -713,7 +727,8 @@ fn category_labels_are_not_executable_scripts() {
     }
     assert_eq!(
         generate(&ScratchProject {
-            targets: vec![sprite]
+            targets: vec![sprite],
+            monitors: vec![],
         }),
         "project {\n    sprite \"Sprite1\" {\n    }\n}\n"
     );
@@ -767,6 +782,7 @@ fn surplus_procedure_defaults_do_not_discard_definitions_or_bodies() {
             ("zero", prototype),
             ("body", block("pen_stamp", &[])),
         ])],
+        monitors: vec![],
     });
     assert!(output.contains("define: No_arguments() {\n            stamp\n"));
     assert!(!output.contains("unknown"));
@@ -820,6 +836,7 @@ fn pen_commands_keep_nested_inputs_and_special_list_indexes() {
     sprite.blocks.get_mut("size").unwrap().next = Some("param".to_owned());
     let output = generate(&ScratchProject {
         targets: vec![sprite],
+        monitors: vec![],
     });
     assert!(output.contains(concat!(
         "set_pen_color \"#123456\"\n",
@@ -834,6 +851,7 @@ fn pen_commands_keep_nested_inputs_and_special_list_indexes() {
             .insert("LIST".to_owned(), json!(["items", "list-id"]));
         let project = ScratchProject {
             targets: vec![target(vec![("hat", hat("delete")), ("delete", delete)])],
+            monitors: vec![],
         };
         assert!(generate(&project).contains(&format!("delete: items at \"{selector}\"")));
     }

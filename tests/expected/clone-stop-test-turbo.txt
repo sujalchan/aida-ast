@@ -1,0 +1,3 @@
+variable one: Number(50.0)
+say: "50 1"
+variable two: Number(99.0)

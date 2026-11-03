@@ -19,6 +19,33 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize)]
 pub struct ScratchProject {
     pub targets: Vec<ScratchTarget>,
+    #[serde(default)]
+    pub monitors: Vec<ScratchMonitor>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScratchMonitor {
+    pub id: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub opcode: String,
+    #[serde(default)]
+    pub params: HashMap<String, Value>,
+    #[serde(default, rename = "spriteName")]
+    pub sprite_name: Option<String>,
+    #[serde(default)]
+    pub value: Value,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default)]
+    pub visible: bool,
+    #[serde(default, rename = "sliderMin")]
+    pub slider_min: f64,
+    #[serde(default, rename = "sliderMax")]
+    pub slider_max: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -26,10 +53,18 @@ pub struct ScratchTarget {
     pub name: String,
     #[serde(rename = "isStage")]
     pub is_stage: bool,
+    #[serde(default, rename = "layerOrder")]
+    pub layer_order: u32,
     #[serde(default)]
     pub x: f64,
     #[serde(default)]
     pub y: f64,
+    #[serde(default = "default_direction")]
+    pub direction: f64,
+    #[serde(default = "default_size")]
+    pub size: f64,
+    #[serde(default = "default_visible")]
+    pub visible: bool,
 
     #[serde(default, deserialize_with = "deserialize_blocks")]
     pub blocks: HashMap<String, ScratchBlock>,
@@ -41,7 +76,41 @@ pub struct ScratchTarget {
     pub lists: HashMap<String, ScratchList>,
 
     #[serde(default)]
+    pub costumes: Vec<ScratchAsset>,
+    #[serde(default)]
+    pub sounds: Vec<ScratchAsset>,
+    #[serde(default, rename = "currentCostume")]
+    pub current_costume: usize,
+
+    #[serde(default)]
     pub broadcasts: HashMap<String, String>,
+}
+
+fn default_direction() -> f64 {
+    90.0
+}
+fn default_size() -> f64 {
+    100.0
+}
+fn default_visible() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScratchAsset {
+    pub name: String,
+    #[serde(default, rename = "dataFormat")]
+    pub data_format: String,
+    #[serde(default, rename = "assetId")]
+    pub asset_id: String,
+    #[serde(default)]
+    pub md5ext: String,
+    #[serde(default, rename = "bitmapResolution")]
+    pub bitmap_resolution: Option<f64>,
+    #[serde(default, rename = "rotationCenterX")]
+    pub rotation_center_x: f64,
+    #[serde(default, rename = "rotationCenterY")]
+    pub rotation_center_y: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -311,5 +380,41 @@ pub fn print_blocks(target: &ScratchTarget) {
             }
             None => println!("    {name}: unknown input {input}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod graphics_metadata_tests {
+    use super::parse_project;
+
+    #[test]
+    fn parses_sprite_assets_layer_order_and_variable_monitors() {
+        let project = parse_project(
+            r#"{
+                "targets": [{
+                    "name": "Stage", "isStage": true, "variables": {}, "lists": {},
+                    "blocks": {}, "costumes": [], "sounds": []
+                }, {
+                    "name": "Sprite", "isStage": false, "layerOrder": 4,
+                    "x": 12, "y": -8, "direction": 45, "size": 80,
+                    "visible": true, "variables": {"v-id": ["score", 2]}, "lists": {},
+                    "blocks": {}, "currentCostume": 0,
+                    "costumes": [{"name": "costume", "md5ext": "asset.png",
+                        "bitmapResolution": 2, "rotationCenterX": 10, "rotationCenterY": 11}],
+                    "sounds": []
+                }],
+                "monitors": [{"id": "v-id", "mode": "large", "opcode": "data_variable",
+                    "params": {"VARIABLE": "score"}, "spriteName": "Sprite", "value": 2,
+                    "x": 10, "y": 20, "visible": true}]
+            }"#,
+        )
+        .unwrap();
+
+        let sprite = &project.targets[1];
+        assert_eq!(sprite.layer_order, 4);
+        assert_eq!(sprite.direction, 45.0);
+        assert_eq!(sprite.costumes[0].md5ext, "asset.png");
+        assert_eq!(project.monitors[0].id, "v-id");
+        assert_eq!(project.monitors[0].sprite_name.as_deref(), Some("Sprite"));
     }
 }

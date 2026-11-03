@@ -100,10 +100,55 @@ mod tests {
             )
         );
         assert!(output.contains("state.change_x_by(scratch_to_number(1.0_f64));"));
+        assert!(output.contains("state.request_redraw();"));
         assert!(output.contains("self.scheduler.script_ids_in_frame_order()"));
         assert!(output.contains("self.scheduler.advance_script_id(id, &mut self.state)"));
         assert!(!output.contains("unsupported statement: motion_gotoxy"));
         assert!(!output.contains("unsupported statement: motion_changexby"));
+    }
+
+    #[test]
+    fn generated_program_exposes_tick_redraw_and_input_state_to_compiled_code() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1", "isStage": false, "variables": {},
+                    "blocks": {
+                        "hat": {"opcode":"event_whenflagclicked", "next":"say_key", "topLevel":true, "inputs":{}, "fields":{}},
+                        "say_key": {"opcode":"looks_say", "next":"say_x", "parent":"hat", "inputs":{"MESSAGE":[3,"key",[10,""]]}, "fields":{}},
+                        "key": {"opcode":"sensing_keypressed", "next":null, "parent":"say_key", "inputs":{}, "fields":{"KEY_OPTION":["space",null]}},
+                        "say_x": {"opcode":"looks_say", "next":null, "parent":"say_key", "inputs":{"MESSAGE":[3,"mouse_x",[10,""]]}, "fields":{}},
+                        "mouse_x": {"opcode":"sensing_mousex", "next":null, "parent":"say_x", "inputs":{}, "fields":{}}
+                    }
+                }]
+            }).to_string(),
+        ).unwrap();
+        let output = generate(&project);
+        assert!(output.contains("pub fn begin_tick(&mut self)"));
+        assert!(output.contains("pub fn redraw_requested(&self)"));
+        assert!(output.contains("pub fn presentation_consumed(&mut self)"));
+        assert!(output.contains("pub fn apply_input(&mut self, event: RuntimeInputEvent)"));
+        assert!(output.contains("state.key_pressed(\"space\")"));
+        assert!(output.contains("state.mouse_x()"));
+    }
+
+    #[test]
+    fn keypress_hats_start_generated_scripts_from_input_edges() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1", "isStage": false, "variables": {},
+                    "blocks": {
+                        "hat": {"opcode":"event_whenkeypressed", "next":"say", "topLevel":true, "inputs":{}, "fields":{"KEY_OPTION":["space",null]}},
+                        "say": {"opcode":"looks_say", "next":null, "parent":"hat", "inputs":{"MESSAGE":[1,[10,"key"]]}, "fields":{}}
+                    }
+                }]
+            }).to_string(),
+        ).unwrap();
+        let output = generate(&project);
+        assert!(output.contains("fn new_keypress_scripts(key: &str, state: &ScratchState)"));
+        assert!(output.contains("\"space\" => { for instance in state.instances_for_target(0)"));
+        assert!(output.contains("self.scheduler.add_scripts(scripts)"));
     }
 
     #[test]
@@ -621,7 +666,7 @@ mod tests {
             output.contains("if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }")
         );
         assert!(output.contains("_ => { script.frames.pop(); continue; }"));
-        assert!(output.contains("print_value!(\"say\", \"returned\");"));
+        assert!(output.contains("print_value!(state, \"say\", \"returned\");"));
     }
 
     #[test]

@@ -210,6 +210,17 @@ fn block_expression(
                 )
             })
             .unwrap_or_else(|| unsupported_expression("missing list reference")),
+        "sensing_keypressed" => block
+            .fields
+            .get("KEY_OPTION")
+            .and_then(Value::as_array)
+            .and_then(|field| field.first())
+            .and_then(Value::as_str)
+            .map(|key| format!("state.key_pressed({})", quote(key)))
+            .unwrap_or_else(|| unsupported_expression("missing key option")),
+        "sensing_mousedown" => "state.mouse_down()".to_owned(),
+        "sensing_mousex" => "state.mouse_x()".to_owned(),
+        "sensing_mousey" => "state.mouse_y()".to_owned(),
         "data_listcontainsitem" => list_field(block, "LIST", lists)
             .map(|list| {
                 format!(
@@ -420,6 +431,47 @@ pub(super) fn local_expression(
     }
 }
 
+pub(super) fn expression_argument(expression: &str) -> &str {
+    let bytes = expression.as_bytes();
+    if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
+        return expression;
+    }
+
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match byte {
+            b'"' => in_string = true,
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 && index + 1 != bytes.len() {
+                    return expression;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if depth == 0 {
+        &expression[1..expression.len() - 1]
+    } else {
+        expression
+    }
+}
+
 fn local_block_expression(
     target: &ScratchTarget,
     block: &ScratchBlock,
@@ -448,16 +500,20 @@ fn local_block_expression(
                 let left = if fast_math {
                     left.code
                 } else {
-                    format!("scratch_number_operand({})", left.code)
+                    format!("scratch_number_operand({})", expression_argument(&left.code))
                 };
                 let right = if fast_math {
                     right.code
                 } else {
-                    format!("scratch_number_operand({})", right.code)
+                    format!("scratch_number_operand({})", expression_argument(&right.code))
                 };
                 format!("({left} {operator} {right})")
             } else {
-                format!("{function}({}, {})", left.code, right.code)
+                format!(
+                    "{function}({}, {})",
+                    expression_argument(&left.code),
+                    expression_argument(&right.code)
+                )
             };
             Some(LocalExpression {
                 code,
@@ -542,27 +598,33 @@ fn local_block_expression(
                 if fast_math {
                     value.code.clone()
                 } else {
-                    format!("scratch_number_operand({})", value.code)
+                    format!(
+                        "scratch_number_operand({})",
+                        expression_argument(&value.code)
+                    )
                 }
             } else {
-                format!("scratch_to_number({})", value.code)
+                format!(
+                    "scratch_to_number({})",
+                    expression_argument(&value.code)
+                )
             };
             let operator = field_value(block, "OPERATOR")?.as_str()?;
             let code = match operator {
                 "sin" => format!(
                     "{}({})",
                     if fast_math { "fast_sin" } else { "scratch_sin" },
-                    value.code
+                    expression_argument(&value.code)
                 ),
                 "cos" => format!(
                     "{}({})",
                     if fast_math { "fast_cos" } else { "scratch_cos" },
-                    value.code
+                    expression_argument(&value.code)
                 ),
                 "tan" => format!(
                     "{}({})",
                     if fast_math { "fast_tan" } else { "scratch_tan" },
-                    value.code
+                    expression_argument(&value.code)
                 ),
                 "asin" => format!(
                     "{}({})",
@@ -571,7 +633,7 @@ fn local_block_expression(
                     } else {
                         "scratch_asin_degrees"
                     },
-                    value.code
+                    expression_argument(&value.code)
                 ),
                 "acos" => format!(
                     "{}({})",
@@ -580,7 +642,7 @@ fn local_block_expression(
                     } else {
                         "scratch_acos_degrees"
                     },
-                    value.code
+                    expression_argument(&value.code)
                 ),
                 "atan" => format!(
                     "{}({})",
@@ -589,7 +651,7 @@ fn local_block_expression(
                     } else {
                         "scratch_atan_degrees"
                     },
-                    value.code
+                    expression_argument(&value.code)
                 ),
                 "abs" => format!("({numeric}).abs()"),
                 "floor" => format!("({numeric}).floor()"),

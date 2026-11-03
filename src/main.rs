@@ -20,6 +20,7 @@ use std::{
 
 mod aida;
 mod extractor;
+#[allow(dead_code)]
 mod parser;
 mod rust;
 

@@ -18,7 +18,7 @@ and both component directories. The generator writes the selected project to
 `aida-runtime/src/program.rs`; the runtime build then compiles that file.
 
 ```sh
-cargo run -p aida-ast -- --runtime aida-runtime/src/program.rs path/to/project.sb3 &&
+cargo run --release -p aida-ast -- --runtime aida-runtime/src/program.rs path/to/project.sb3 &&
 cargo build --release -p aida-runtime &&
 ./target/release/aida-runtime --turbo
 ```
@@ -31,7 +31,7 @@ For Scratch-compatible maths, omit `--fast-math`. Fast maths is an opt-in
 generator option; runtime scheduling is selected separately:
 
 ```sh
-cargo run -p aida-ast -- --fast-math --runtime aida-runtime/src/program.rs path/to/project.sb3 &&
+cargo run --release -p aida-ast -- --fast-math --runtime aida-runtime/src/program.rs path/to/project.sb3 &&
 cargo build --release -p aida-runtime &&
 ./target/release/aida-runtime --turbo
 ```
@@ -46,7 +46,7 @@ for the combined launcher and more examples.
 `aida-ast/tests/src` and writes the modules to `aida-ast/tests/output`:
 
 ```sh
-cargo run -p aida-ast -- --tests
+cargo run --release -p aida-ast -- --tests
 ```
 
 With no arguments, the legacy text-generation path reads `example.sb3` from the

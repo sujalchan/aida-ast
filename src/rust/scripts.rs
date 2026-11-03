@@ -22,7 +22,7 @@ use serde_json::Value;
 use crate::parser::{InputValue, ScratchProject, ScratchTarget, parse_input};
 
 use super::{
-    literals::line,
+    literals::{line, quote},
     project::{ListInfo, VariableInfo, rust_identifier},
     statements::generate_resumable_script,
 };
@@ -172,7 +172,10 @@ pub(super) fn generate_green_flag_functions(
                     script.function, script.function, script.target_index
                 ),
             );
-        } else if script.hat.opcode == "control_start_as_clone" {
+        } else if matches!(
+            script.hat.opcode.as_str(),
+            "control_start_as_clone" | "event_whenkeypressed"
+        ) {
             line(
                 output,
                 0,
@@ -229,6 +232,61 @@ pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
         0,
         &format!(
             "#[allow(dead_code, unused_variables, unused_mut)]\nfn new_broadcast_scripts(message: usize, state: &ScratchState) -> Vec<GeneratedScript> {{ let mut scripts = Vec::new(); match message {{ {receiver_match} }} scripts }}\n",
+        ),
+    );
+    let mut key_groups = BTreeMap::<String, Vec<&GreenFlagScript<'_>>>::new();
+    for script in &scripts {
+        if script.hat.opcode != "event_whenkeypressed" {
+            continue;
+        }
+        let key = script
+            .hat
+            .fields
+            .get("KEY_OPTION")
+            .and_then(Value::as_array)
+            .and_then(|field| field.first())
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        key_groups.entry(key).or_default().push(script);
+    }
+    let any_key_scripts = key_groups.remove("any").unwrap_or_default();
+    let any_key_starters = any_key_scripts
+        .iter()
+        .map(|script| {
+            format!(
+                "for instance in state.instances_for_target({}) {{ scripts.push(new_{}_for(instance)); }}",
+                script.target_index, script.function
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let key_arms = key_groups
+        .into_iter()
+        .map(|(key, receivers)| {
+            let starters = receivers
+                .iter()
+                .map(|script| {
+                    format!(
+                        "for instance in state.instances_for_target({}) {{ scripts.push(new_{}_for(instance)); }}",
+                        script.target_index, script.function
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{} => {{ {} }}", quote(&key), starters)
+        })
+        .collect::<Vec<_>>();
+    let key_match = if key_arms.is_empty() {
+        "_ => {}".to_owned()
+    } else {
+        format!("{}, _ => {{}}", key_arms.join(", "))
+    };
+    line(
+        output,
+        0,
+        &format!(
+            "#[allow(dead_code, unused_variables, unused_mut)]\nfn new_keypress_scripts(key: &str, state: &ScratchState) -> Vec<GeneratedScript> {{ let mut scripts = Vec::new(); {any_key_starters} match key {{ {key_match} }} scripts }}\n"
         ),
     );
     let mut clone_targets = Vec::new();
@@ -306,12 +364,16 @@ fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
         for (_, hat) in event_hats(target).into_iter().filter(|(_, hat)| {
             matches!(
                 hat.opcode.as_str(),
-                "event_whenflagclicked" | "control_start_as_clone" | "event_whenbroadcastreceived"
+                "event_whenflagclicked"
+                    | "control_start_as_clone"
+                    | "event_whenbroadcastreceived"
+                    | "event_whenkeypressed"
             )
         }) {
             let function_type = match hat.opcode.as_str() {
                 "event_whenflagclicked" => "green_flag_script",
                 "control_start_as_clone" => "clone_start_script",
+                "event_whenkeypressed" => "key_pressed_script",
                 _ => "broadcast_receiver_script",
             };
             let function = format!("{function_type}_{target_name}_{}", scripts.len() + 1);
