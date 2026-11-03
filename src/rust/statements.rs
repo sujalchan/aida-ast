@@ -529,7 +529,6 @@ fn generate_resumable_block(
                     pc_literal(next_pc)
                 ),
             );
-            line(output, indent + 1, "state.request_redraw();");
             line(
                 output,
                 indent + 1,
@@ -1293,6 +1292,14 @@ fn generate_resumable_statement(
         },
         "data_addtolist" => {
             if let Some(list) = list_field(block, "LIST", lists) {
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "let scratch_list_before = state.list_before_change({});",
+                        list.slot
+                    ),
+                );
                 let input = block.inputs.get("ITEM");
                 let item = owned_input(target, input, variables, lists, arguments);
                 line(
@@ -1305,12 +1312,25 @@ fn generate_resumable_statement(
                     indent,
                     &format!("state.list_mut({}).add(scratch_list_item);", list.slot),
                 );
+                line(
+                    output,
+                    indent,
+                    &format!("state.list_changed({}, scratch_list_before);", list.slot),
+                );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
             }
         }
         "data_deleteoflist" => {
             if let Some(list) = list_field(block, "LIST", lists) {
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "let scratch_list_before = state.list_before_change({});",
+                        list.slot
+                    ),
+                );
                 let index = owned_input(
                     target,
                     block.inputs.get("INDEX"),
@@ -1328,6 +1348,11 @@ fn generate_resumable_statement(
                     indent,
                     &format!("state.list_mut({}).delete(scratch_list_index);", list.slot),
                 );
+                line(
+                    output,
+                    indent,
+                    &format!("state.list_changed({}, scratch_list_before);", list.slot),
+                );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
             }
@@ -1337,7 +1362,20 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
+                    &format!(
+                        "let scratch_list_before = state.list_before_change({});",
+                        list.slot
+                    ),
+                );
+                line(
+                    output,
+                    indent,
                     &format!("state.list_mut({}).delete_all();", list.slot),
+                );
+                line(
+                    output,
+                    indent,
+                    &format!("state.list_changed({}, scratch_list_before);", list.slot),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -1345,6 +1383,14 @@ fn generate_resumable_statement(
         }
         "data_insertatlist" | "data_replaceitemoflist" => {
             if let Some(list) = list_field(block, "LIST", lists) {
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "let scratch_list_before = state.list_before_change({});",
+                        list.slot
+                    ),
+                );
                 let input = block.inputs.get("ITEM");
                 let item = owned_input(target, input, variables, lists, arguments);
                 let index = owned_input(
@@ -1383,6 +1429,11 @@ fn generate_resumable_statement(
                         ),
                     );
                 }
+                line(
+                    output,
+                    indent,
+                    &format!("state.list_changed({}, scratch_list_before);", list.slot),
+                );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
             }
@@ -1600,7 +1651,6 @@ fn generate_resumable_statement(
                 indent,
                 &format!("state.set_xy(scratch_to_number({x}), scratch_to_number({y}));"),
             );
-            line(output, indent, "state.request_redraw();");
         }
         "motion_goto" => {
             if let Some(position) = motion_target_position_expression(target, block, "TO") {
@@ -1610,7 +1660,6 @@ fn generate_resumable_statement(
                     &format!("if let Some((motion_x, motion_y)) = {position} {{"),
                 );
                 line(output, indent + 1, "state.set_xy(motion_x, motion_y);");
-                line(output, indent + 1, "state.request_redraw();");
                 line(output, indent, "}");
             } else {
                 line(output, indent, "todo!(\"missing motion target\");");
@@ -1630,7 +1679,6 @@ fn generate_resumable_statement(
                 indent,
                 &format!("state.change_x_by(scratch_to_number({dx}));"),
             );
-            line(output, indent, "state.request_redraw();");
         }
         "motion_changeyby" => {
             let dy = expression(
@@ -1646,7 +1694,6 @@ fn generate_resumable_statement(
                 indent,
                 &format!("state.change_y_by(scratch_to_number({dy}));"),
             );
-            line(output, indent, "state.request_redraw();");
         }
         "motion_glideto" | "motion_glidesecstoxy" => generate_glide_statement(
             target, block, next_pc, variables, lists, arguments, output, indent,
@@ -1699,7 +1746,6 @@ fn generate_resumable_statement(
                 indent,
                 "if let (Some(target), Some(source)) = (clone_target, clone_source) { state.create_clone(source, target, 300); }",
             );
-            line(output, indent, "state.request_redraw();");
         }
         "control_delete_this_clone" => {
             line(
@@ -1707,7 +1753,6 @@ fn generate_resumable_statement(
                 indent,
                 "if state.delete_current_clone() { return ScriptStatus::Complete; }",
             );
-            line(output, indent, "state.request_redraw();");
         }
         "procedures_call" => line(
             output,
@@ -1886,7 +1931,6 @@ fn generate_glide_statement(
         "if let Some((motion_x, motion_y)) = motion_glide.position_at(clock.now_millis()) {",
     );
     line(output, indent + 1, "state.set_xy(motion_x, motion_y);");
-    line(output, indent + 1, "state.request_redraw();");
     line(
         output,
         indent + 1,
@@ -1900,7 +1944,6 @@ fn generate_glide_statement(
         "let (motion_x, motion_y) = motion_glide.destination();",
     );
     line(output, indent + 1, "state.set_xy(motion_x, motion_y);");
-    line(output, indent + 1, "state.request_redraw();");
     line(
         output,
         indent + 1,

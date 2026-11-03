@@ -81,6 +81,9 @@ mod tests {
         assert!(output.contains("1 => { for instance in state.instances_for_target(2)"));
         assert!(output.contains("2 => { for instance in state.instances_for_target(1)"));
         assert!(output.contains("fn broadcast_receiver(&self) -> Option<(usize, usize, usize)>"));
+        assert!(!output.contains(
+            "self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id)"
+        ));
         assert!(!output.contains("unsupported statement: event_broadcast"));
         assert!(!output.contains("unsupported statement: event_broadcastandwait"));
     }
@@ -110,12 +113,12 @@ mod tests {
             )
         );
         assert!(output.contains("state.change_x_by(scratch_to_number(1.0_f64));"));
-        assert!(output.contains("state.request_redraw();"));
+        assert!(!output.contains("state.request_redraw();"));
         assert!(
             output.contains("self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order)")
         );
         assert!(output.contains("self.scheduler.advance_script_id(id, &mut self.state)"));
-        assert!(output.contains(
+        assert!(!output.contains(
             "self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id)"
         ));
         assert!(!output.contains("unsupported statement: motion_gotoxy"));
@@ -136,7 +139,8 @@ mod tests {
         assert!(output.contains("GlideState::new(clock.now_millis()"));
         assert!(output.contains("motion_glide.position_at(clock.now_millis())"));
         assert!(output.contains("return ScriptStatus::Yield;"));
-        assert!(output.contains("state.request_redraw();"));
+        assert!(output.contains("state.set_xy(motion_x, motion_y);"));
+        assert!(!output.contains("state.request_redraw();"));
         assert!(output.contains("state.change_local_by(1, scratch_change);"));
         assert!(!output.contains(
             "self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id)"
@@ -193,10 +197,13 @@ mod tests {
             output
                 .contains("\n                2 => {\n                    let scratch_bubble_text")
         );
-        assert!(
-            output.contains("\n                3 => {\n                    let scratch_change")
+        assert_eq!(
+            output
+                .matches("state.set_speech_bubble(BubbleKind::Think")
+                .count(),
+            2
         );
-        assert!(output.contains("state.change_shared(0, scratch_change);"));
+        assert!(output.contains("state.set_shared(0, scratch_new_value);"));
     }
 
     #[test]
@@ -712,9 +719,9 @@ mod tests {
 
         let output = generate(&project);
         assert!(output.contains("arguments[0]).clone()"));
-        assert!(output.contains("arguments: vec![(\"hello\").to_owned().into()]"));
+        assert!(output.contains("\"hello\").to_owned().into()"));
         assert!(output.contains("script.frames.push(ProcedureFrame"));
-        assert!(output.contains("function: 1"));
+        assert!(output.contains("ProcedureFrame::new(1"));
         assert!(output.contains("new_clone_start_script_sprite1_1(_instance)"));
     }
 
@@ -750,8 +757,8 @@ mod tests {
         let output = generate(&project);
         assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
         assert!(output.contains("new_clone_start_script_sprite1_1(_instance)"));
-        assert!(output.contains("warp_mode: inherited_warp || true"));
-        assert!(output.contains("warp_mode: inherited_warp || false"));
+        assert!(output.contains("inherited_warp || true"));
+        assert!(output.contains("inherited_warp || false"));
         assert!(output.contains("if !(scratch_bool(state.get(0)))"));
         assert!(output.contains("script.frames.last_mut().unwrap().pc = 1;"));
         assert!(
@@ -855,7 +862,7 @@ mod tests {
         assert!(output.contains("ScriptStatus::WaitUntil(wait_deadline)"));
         assert!(output.contains("clock.now_millis().saturating_add(duration_ms)"));
         assert!(!output.contains("clock.now_millis() < wait_deadline"));
-        assert!(output.contains("warp_mode: inherited_warp || true"));
+        assert!(output.contains("inherited_warp || true"));
         assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
         assert!(!output.contains("if script.warp_budget_expired(clock) { return ScriptStatus::Yield; }\n                            continue;"));
         assert!(output.contains("pub fn advance(&mut self) -> SchedulerStatus"));
@@ -935,7 +942,7 @@ mod tests {
         .unwrap();
 
         let output = generate(&project);
-        assert!(output.contains("repeat_counts: vec![0; 2]"));
+        assert!(output.contains("vec![0; 2]"));
         assert!(
             output.contains("script.frames.last_mut().unwrap().repeat_counts[0] = repeat_count;")
         );

@@ -120,12 +120,16 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
             .expect("every allocated variable has an initializer");
         initial_values[info.slot] = format!("({}).into()", literal(&variable.value));
         variable_metadata[info.slot] = format!(
-            "ScratchVariableMetadata::for_target({}, {}, {}, {}, {})",
+            "ScratchVariableMetadata::for_target({}, {}, {}, {}, {}).with_monitor_visible({})",
             quote(id),
             quote(&info.name),
             quote(&info.target),
             info.target_index,
-            info.is_stage
+            info.is_stage,
+            project
+                .monitors
+                .iter()
+                .any(|monitor| monitor.visible && monitor.id == *id)
         );
     }
     let mut initial_lists = vec![String::new(); lists.len()];
@@ -164,12 +168,20 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         &mut output,
         1,
         &format!(
-            "let mut state = ScratchState::with_project_data(vec![{}], vec![{}], vec![{}], vec![{}], vec![false; {}]);",
+            "let mut state = ScratchState::with_project_data(vec![{}], vec![{}], vec![{}], vec![{}], vec![{}]);",
             initial_values.join(", "),
             variable_metadata.join(", "),
             initial_lists.join(", "),
             list_metadata.join(", "),
-            lists.len()
+            lists
+                .iter()
+                .map(|(id, _)| project
+                    .monitors
+                    .iter()
+                    .any(|monitor| monitor.visible && monitor.id == *id)
+                    .to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     );
 
@@ -208,7 +220,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     }
     output.push_str(" }\n");
     if uses_broadcasts || uses_clones {
-        output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {expire_bubbles}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut next_new_id = self.scheduler.next_script_id(); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return status; }} progressed = true; self.process_after_step(); if self.scheduler.next_script_id() != next_new_id {{ self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id); next_new_id = self.scheduler.next_script_id(); }} }} }} if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }} }}\n"));
+        output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {expire_bubbles}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return status; }} progressed = true; self.process_after_step(); }} }} if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }} }}\n"));
     } else {
         output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {expire_bubbles}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return status; }} progressed = true; }} }} if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }} }}\n"));
     }
@@ -224,6 +236,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     output.push_str("    pub fn begin_tick(&mut self) { self.state.begin_tick(); }\n");
     output
         .push_str("    pub fn redraw_requested(&self) -> bool { self.state.redraw_requested() }\n");
+    output.push_str("    pub fn presentation_requested(&self) -> bool { self.state.presentation_requested() }\n");
     output.push_str(
         "    pub fn presentation_consumed(&mut self) { self.state.presentation_consumed(); }\n",
     );
