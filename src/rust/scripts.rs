@@ -42,6 +42,7 @@ pub(super) fn generate_green_flag_functions(
     project: &ScratchProject,
     variables: &HashMap<String, VariableInfo>,
     lists: &HashMap<String, ListInfo>,
+    fast_math: bool,
     output: &mut String,
 ) {
     let scripts = event_scripts(project);
@@ -92,7 +93,7 @@ pub(super) fn generate_green_flag_functions(
             output,
             3,
             &format!(
-                "Self::{}(instance, script) => {{ state.set_current_instance(*instance); step_{}(script, state, clock) }},",
+                "Self::{}(_, script) => step_{}(script, state, clock),",
                 script.variant, script.function
             ),
         );
@@ -145,6 +146,7 @@ pub(super) fn generate_green_flag_functions(
             lists,
             &procedures,
             &script.function,
+            fast_math,
             output,
         );
         line(

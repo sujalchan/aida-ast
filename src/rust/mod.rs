@@ -18,7 +18,7 @@ mod project;
 mod scripts;
 mod statements;
 
-pub use project::generate;
+pub use project::{generate, generate_with_options};
 
 #[cfg(test)]
 mod tests {
@@ -41,6 +41,8 @@ mod tests {
         assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
         assert!(output.contains("new_clone_start_script_sprite1_2(_instance)"));
         assert!(output.contains("new_clone_start_script_sprite1_5(_instance)"));
+        assert!(output.contains("take_pending_clones"));
+        assert!(output.contains("remove_target_scripts"));
         assert!(output.contains("ScratchVariableMetadata::for_target(\"`jEk@4|i[#Fk?(8x)AV.-my variable\", \"my variable\", \"Stage\", 0, true)"));
     }
 
@@ -94,6 +96,9 @@ mod tests {
         assert!(!output.contains("warp_budget_expired"));
         assert!(!output.contains("yield_at_safe_point"));
         assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
+        assert!(!output.contains("take_pending_clones"));
+        assert!(!output.contains("remove_target_scripts"));
+        assert!(!output.contains("state.set_current_instance(*instance)"));
         assert!(output.contains("#[allow(dead_code)]\npub fn run()"));
     }
 
@@ -255,6 +260,44 @@ mod tests {
             .unwrap()
             + commit;
         assert!(safeguard < commit && commit < yielded);
+    }
+
+    #[test]
+    fn fast_math_only_changes_proven_numeric_loop_expressions() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/hard-math-10-seconds.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let compatible = generate(&project);
+        let fast = super::generate_with_options(&project, true);
+
+        assert!(compatible.contains("scratch_number_operand(scratch_local_0)"));
+        assert!(compatible.contains("scratch_sin("));
+        assert!(!compatible.contains("fast_sin("));
+        assert!(fast.contains("fast_sin("));
+        assert!(fast.contains("fast_cos("));
+        assert!(fast.contains("fast_asin_degrees("));
+        assert!(!fast.contains("scratch_number_operand(scratch_local_0)"));
+
+        let dynamic_input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/operators.sb3");
+        let json = crate::extractor::read_project_json(dynamic_input).unwrap();
+        let dynamic_project = parse_project(&json).unwrap();
+        let dynamic_fast = super::generate_with_options(&dynamic_project, true);
+        assert!(dynamic_fast.contains("scratch_add(state.get("));
+        assert!(dynamic_fast.contains("scratch_to_number(state.get_shared("));
+    }
+
+    #[test]
+    fn stage_changes_use_the_shared_numeric_update_path() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/addition-loop.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("let scratch_change = scratch_to_number(1.0_f64);"));
+        assert!(output.contains("state.change_shared(0, scratch_change);"));
     }
 
     #[test]

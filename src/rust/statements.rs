@@ -149,6 +149,7 @@ pub(super) fn generate_resumable_script(
     lists: &HashMap<String, ListInfo>,
     procedures: &[ProcedureSignature],
     function_name: &str,
+    fast_math: bool,
     output: &mut String,
 ) -> (usize, usize, usize) {
     let mut graph = ScriptGraph::new();
@@ -217,6 +218,7 @@ pub(super) fn generate_resumable_script(
                 procedures,
                 &procedure_entries,
                 &mut emitted_blocks,
+                fast_math,
                 output,
             ),
             ScriptNode::LoopBoundary(id) => {
@@ -260,6 +262,7 @@ pub(super) fn generate_resumable_script(
                     procedures,
                     &procedure_entries,
                     &mut emitted_blocks,
+                    fast_math,
                     output,
                 ),
                 ScriptNode::LoopBoundary(id) => {
@@ -619,6 +622,7 @@ fn generate_resumable_block_chain(
     procedures: &[ProcedureSignature],
     procedure_entries: &HashMap<String, ProcedureEntry>,
     emitted_blocks: &mut HashSet<String>,
+    fast_math: bool,
     output: &mut String,
 ) {
     if emitted_blocks.contains(id) {
@@ -641,7 +645,9 @@ fn generate_resumable_block_chain(
     if let Some(plan) = numeric_loop_plan(target, block, variables) {
         emitted_blocks.insert(id.to_owned());
         emitted_blocks.extend(plan.body.iter().cloned());
-        generate_native_numeric_loop(target, id, block, graph, variables, &plan, output);
+        generate_native_numeric_loop(
+            target, id, block, graph, variables, &plan, fast_math, output,
+        );
         return;
     }
     if !is_straight_line_block(block) {
@@ -808,6 +814,7 @@ fn generate_native_numeric_loop(
     graph: &ScriptGraph,
     variables: &HashMap<String, VariableInfo>,
     plan: &NumericLoopPlan,
+    fast_math: bool,
     output: &mut String,
 ) {
     let pc = graph.block_pcs[id];
@@ -846,7 +853,7 @@ fn generate_native_numeric_loop(
 
     if block.opcode == "control_repeat" {
         generate_native_repeat_loop(
-            target, id, block, graph, variables, plan, &locals, next_pc, output,
+            target, id, block, graph, variables, plan, &locals, next_pc, output, fast_math,
         );
     } else {
         line(output, 5, "loop {");
@@ -856,6 +863,7 @@ fn generate_native_numeric_loop(
                 block.inputs.get("CONDITION"),
                 variables,
                 &locals,
+                fast_math,
                 &mut HashSet::new(),
             )
             .expect("numeric loop condition was validated");
@@ -867,7 +875,7 @@ fn generate_native_numeric_loop(
             };
             line(output, 6, &format!("if {exit_condition} {{ break; }}"));
         }
-        generate_native_numeric_body(target, variables, plan, &locals, output, 6);
+        generate_native_numeric_body(target, variables, plan, &locals, fast_math, output, 6);
         line(
             output,
             6,
@@ -907,6 +915,7 @@ fn generate_native_repeat_loop(
     locals: &HashMap<usize, String>,
     next_pc: usize,
     output: &mut String,
+    fast_math: bool,
 ) {
     let pc = graph.block_pcs[id];
     let slot = graph.repeat_slots[id];
@@ -915,6 +924,7 @@ fn generate_native_repeat_loop(
         block.inputs.get("TIMES"),
         variables,
         locals,
+        fast_math,
         &mut HashSet::new(),
     )
     .expect("numeric repeat count was validated");
@@ -948,7 +958,7 @@ fn generate_native_repeat_loop(
     line(output, 6, "continue;");
     line(output, 5, "}");
     line(output, 5, "loop {");
-    generate_native_numeric_body(target, variables, plan, locals, output, 6);
+    generate_native_numeric_body(target, variables, plan, locals, fast_math, output, 6);
     line(output, 6, "repeat_remaining -= 1;");
     line(
         output,
@@ -990,6 +1000,7 @@ fn generate_native_numeric_body(
     variables: &HashMap<String, VariableInfo>,
     plan: &NumericLoopPlan,
     locals: &HashMap<usize, String>,
+    fast_math: bool,
     output: &mut String,
     indent: usize,
 ) {
@@ -1002,6 +1013,7 @@ fn generate_native_numeric_body(
             block.inputs.get("VALUE"),
             variables,
             locals,
+            fast_math,
             &mut HashSet::new(),
         )
         .expect("numeric loop expression was validated");
@@ -1018,6 +1030,8 @@ fn generate_native_numeric_body(
             .flatten()
         {
             line(output, indent, &format!("{local} += {constant:?}_f64;"));
+        } else if fast_math && value.kind == LocalValueKind::Number {
+            line(output, indent, &format!("{local} += {};", value.code));
         } else {
             line(
                 output,
@@ -1424,19 +1438,32 @@ fn generate_resumable_statement(
                     arguments,
                     &mut HashSet::new(),
                 );
-                line(
-                    output,
-                    indent,
-                    &format!(
-                        "let scratch_new_value: ScratchValue = scratch_add({}, {value}).into();",
-                        variable.read_expression()
-                    ),
-                );
-                line(
-                    output,
-                    indent,
-                    &variable.write_statement("scratch_new_value"),
-                );
+                if variable.is_stage {
+                    line(
+                        output,
+                        indent,
+                        &format!("let scratch_change = scratch_to_number({value});"),
+                    );
+                    line(
+                        output,
+                        indent,
+                        &format!("state.change_shared({}, scratch_change);", variable.slot),
+                    );
+                } else {
+                    line(
+                        output,
+                        indent,
+                        &format!(
+                            "let scratch_new_value: ScratchValue = scratch_add({}, {value}).into();",
+                            variable.read_expression()
+                        ),
+                    );
+                    line(
+                        output,
+                        indent,
+                        &variable.write_statement("scratch_new_value"),
+                    );
+                }
             } else {
                 line(output, indent, "todo!(\"missing variable reference\");");
             }

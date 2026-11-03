@@ -387,6 +387,7 @@ pub(super) fn local_expression(
     input: Option<&Value>,
     variables: &HashMap<String, VariableInfo>,
     locals: &HashMap<usize, String>,
+    fast_math: bool,
     active: &mut HashSet<String>,
 ) -> Option<LocalExpression> {
     match input.and_then(parse_input)? {
@@ -409,10 +410,9 @@ pub(super) fn local_expression(
             if !active.insert(id.to_owned()) {
                 return None;
             }
-            let result = target
-                .blocks
-                .get(id)
-                .and_then(|block| local_block_expression(target, block, variables, locals, active));
+            let result = target.blocks.get(id).and_then(|block| {
+                local_block_expression(target, block, variables, locals, fast_math, active)
+            });
             active.remove(id);
             result
         }
@@ -425,10 +425,18 @@ fn local_block_expression(
     block: &ScratchBlock,
     variables: &HashMap<String, VariableInfo>,
     locals: &HashMap<usize, String>,
+    fast_math: bool,
     active: &mut HashSet<String>,
 ) -> Option<LocalExpression> {
     let input = |name: &str, active: &mut HashSet<String>| {
-        local_expression(target, block.inputs.get(name), variables, locals, active)
+        local_expression(
+            target,
+            block.inputs.get(name),
+            variables,
+            locals,
+            fast_math,
+            active,
+        )
     };
     let numeric_binary =
         |function: &str, operator: &str, left: &str, right: &str, active: &mut HashSet<String>| {
@@ -437,8 +445,16 @@ fn local_block_expression(
             let native =
                 left.kind == LocalValueKind::Number && right.kind == LocalValueKind::Number;
             let code = if native {
-                let left = format!("scratch_number_operand({})", left.code);
-                let right = format!("scratch_number_operand({})", right.code);
+                let left = if fast_math {
+                    left.code
+                } else {
+                    format!("scratch_number_operand({})", left.code)
+                };
+                let right = if fast_math {
+                    right.code
+                } else {
+                    format!("scratch_number_operand({})", right.code)
+                };
                 format!("({left} {operator} {right})")
             } else {
                 format!("{function}({}, {})", left.code, right.code)
@@ -523,18 +539,58 @@ fn local_block_expression(
         "operator_mathop" => {
             let value = input("NUM", active)?;
             let numeric = if value.kind == LocalValueKind::Number {
-                format!("scratch_number_operand({})", value.code)
+                if fast_math {
+                    value.code.clone()
+                } else {
+                    format!("scratch_number_operand({})", value.code)
+                }
             } else {
                 format!("scratch_to_number({})", value.code)
             };
             let operator = field_value(block, "OPERATOR")?.as_str()?;
             let code = match operator {
-                "sin" => format!("scratch_sin({})", value.code),
-                "cos" => format!("scratch_cos({})", value.code),
-                "tan" => format!("scratch_tan({})", value.code),
-                "asin" => format!("scratch_asin_degrees({})", value.code),
-                "acos" => format!("scratch_acos_degrees({})", value.code),
-                "atan" => format!("scratch_atan_degrees({})", value.code),
+                "sin" => format!(
+                    "{}({})",
+                    if fast_math { "fast_sin" } else { "scratch_sin" },
+                    value.code
+                ),
+                "cos" => format!(
+                    "{}({})",
+                    if fast_math { "fast_cos" } else { "scratch_cos" },
+                    value.code
+                ),
+                "tan" => format!(
+                    "{}({})",
+                    if fast_math { "fast_tan" } else { "scratch_tan" },
+                    value.code
+                ),
+                "asin" => format!(
+                    "{}({})",
+                    if fast_math {
+                        "fast_asin_degrees"
+                    } else {
+                        "scratch_asin_degrees"
+                    },
+                    value.code
+                ),
+                "acos" => format!(
+                    "{}({})",
+                    if fast_math {
+                        "fast_acos_degrees"
+                    } else {
+                        "scratch_acos_degrees"
+                    },
+                    value.code
+                ),
+                "atan" => format!(
+                    "{}({})",
+                    if fast_math {
+                        "fast_atan_degrees"
+                    } else {
+                        "scratch_atan_degrees"
+                    },
+                    value.code
+                ),
                 "abs" => format!("({numeric}).abs()"),
                 "floor" => format!("({numeric}).floor()"),
                 "ceiling" => format!("({numeric}).ceil()"),

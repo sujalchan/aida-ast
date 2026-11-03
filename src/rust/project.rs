@@ -61,6 +61,10 @@ pub(super) struct ListInfo {
 
 /// generate the module header, saved variable declarations, and target scripts.
 pub fn generate(project: &ScratchProject) -> String {
+    generate_with_options(project, false)
+}
+
+pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> String {
     let variables = allocate_variables(project);
     let lists = allocate_lists(project);
     let uses_broadcasts = project.targets.iter().any(|target| {
@@ -71,9 +75,17 @@ pub fn generate(project: &ScratchProject) -> String {
             )
         })
     });
+    let uses_clones = project.targets.iter().any(|target| {
+        target.blocks.values().any(|block| {
+            matches!(
+                block.opcode.as_str(),
+                "control_create_clone_of" | "control_delete_this_clone" | "control_start_as_clone"
+            )
+        })
+    });
     let mut output = String::new();
 
-    generate_green_flag_functions(project, &variables, &lists, &mut output);
+    generate_green_flag_functions(project, &variables, &lists, fast_math, &mut output);
     generate_scripts(project, &mut output);
 
     output.push_str("#[allow(dead_code)]\npub struct GeneratedProgram { state: ScratchState, scheduler: ScriptScheduler<GeneratedScript> }\n\n#[allow(dead_code)]\nimpl GeneratedProgram {\n    pub fn new() -> Self { Self::build(None) }\n    pub fn new_with_clock(clock: Box<dyn Clock>) -> Self { Self::build(Some(clock)) }\n    fn build(clock: Option<Box<dyn Clock>>) -> Self {\n");
@@ -165,11 +177,14 @@ pub fn generate(project: &ScratchProject) -> String {
     output.push_str(
         "    pub fn step(&mut self) -> bool { self.advance() == SchedulerStatus::Progressed }\n",
     );
+    output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state);");
     if uses_broadcasts {
-        output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state); if let Some((sender, message, wait)) = self.scheduler.take_broadcast() { let receivers = new_broadcast_scripts(message, &self.state); self.scheduler.broadcast(sender, receivers, wait); } let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } } status }\n");
-    } else {
-        output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state); let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } } status }\n");
+        output.push_str(" if let Some((sender, message, wait)) = self.scheduler.take_broadcast() { let receivers = new_broadcast_scripts(message, &self.state); self.scheduler.broadcast(sender, receivers, wait); }");
     }
+    if uses_clones {
+        output.push_str(" let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } }");
+    }
+    output.push_str(" status }\n");
     output.push_str("    pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }\n");
     output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }\n");
     output.push_str(
@@ -194,6 +209,12 @@ pub fn generate(project: &ScratchProject) -> String {
 fn runtime_imports(identifiers: &HashSet<String>) -> String {
     const IMPORTS: &[&str] = &[
         "scratch_acos_degrees",
+        "fast_acos_degrees",
+        "fast_asin_degrees",
+        "fast_atan_degrees",
+        "fast_cos",
+        "fast_sin",
+        "fast_tan",
         "scratch_add",
         "scratch_and",
         "scratch_asin_degrees",
