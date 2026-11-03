@@ -16,7 +16,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **190 block cases + 4 procedure opcodes** | **59 implemented ✓, 32 partial -, 103 not implemented x** |
+| **Catalog** | **190 block cases + 4 procedure opcodes** | **63 implemented ✓, 31 partial -, 100 not implemented x** |
 
 ### Control
 
@@ -119,12 +119,12 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 |---|:---:|:---:|
 | `motion_align_scene` | ✓ | x |
 | `motion_changexby` | ✓ | ✓ |
-| `motion_changeyby` | ✓ | x |
+| `motion_changeyby` | ✓ | ✓ |
 | `motion_direction` | ✓ | x |
-| `motion_glidesecstoxy` | ✓ | - |
-| `motion_glideto` | ✓ | x |
+| `motion_glidesecstoxy` | ✓ | ✓ |
+| `motion_glideto` | ✓ | ✓ |
 | `motion_glideto_menu` | ✓ | - |
-| `motion_goto` | ✓ | x |
+| `motion_goto` | ✓ | ✓ |
 | `motion_goto_menu` | ✓ | - |
 | `motion_gotoxy` | ✓ | ✓ |
 | `motion_ifonedgebounce` | ✓ | x |

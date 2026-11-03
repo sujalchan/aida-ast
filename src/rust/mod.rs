@@ -124,6 +124,9 @@ mod tests {
         assert!(output.contains("return ScriptStatus::Yield;"));
         assert!(output.contains("state.request_redraw();"));
         assert!(output.contains("state.change_local_by(1, scratch_change);"));
+        assert!(!output.contains(
+            "self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id)"
+        ));
         let first_glide = output.find("GlideState::new(clock.now_millis()").unwrap();
         let second_glide = output[first_glide + 1..]
             .find("GlideState::new(clock.now_millis()")
