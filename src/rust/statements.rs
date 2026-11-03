@@ -1063,10 +1063,7 @@ fn is_straight_line_block(block: &ScratchBlock) -> bool {
     !block.opcode.starts_with("control_")
         && !matches!(
             block.opcode.as_str(),
-            "motion_glideto"
-                | "motion_glidesecstoxy"
-                | "looks_sayforsecs"
-                | "looks_thinkforsecs"
+            "motion_glideto" | "motion_glidesecstoxy" | "looks_sayforsecs" | "looks_thinkforsecs"
         )
         && block.opcode != "procedures_call"
         && block.opcode != "event_broadcast"
@@ -1468,10 +1465,7 @@ fn generate_resumable_statement(
                     line(
                         output,
                         indent,
-                        &format!(
-                            "state.change_local_by({}, scratch_change);",
-                            variable.slot
-                        ),
+                        &format!("state.change_local_by({}, scratch_change);", variable.slot),
                     );
                 }
             } else {
@@ -1498,7 +1492,10 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!("print_value!(state, {}, scratch_bubble_text.clone());", quote(&name)),
+                    &format!(
+                        "print_value!(state, {}, scratch_bubble_text.clone());",
+                        quote(&name)
+                    ),
                 );
             }
             line(
@@ -1506,7 +1503,11 @@ fn generate_resumable_statement(
                 indent,
                 &format!(
                     "state.set_speech_bubble(BubbleKind::{}, scratch_bubble_text, None);",
-                    if block.opcode == "looks_say" { "Say" } else { "Think" }
+                    if block.opcode == "looks_say" {
+                        "Say"
+                    } else {
+                        "Think"
+                    }
                 ),
             );
         }
@@ -1527,14 +1528,21 @@ fn generate_resumable_statement(
                 arguments,
                 &mut HashSet::new(),
             );
-            line(output, indent, &format!("let scratch_bubble_text = scratch_string({value});"));
+            line(
+                output,
+                indent,
+                &format!("let scratch_bubble_text = scratch_string({value});"),
+            );
             if block.opcode == "looks_sayforsecs" {
                 let name = say_variable_name(target, block.inputs.get("MESSAGE"))
                     .unwrap_or_else(|| "say".to_owned());
                 line(
                     output,
                     indent,
-                    &format!("print_value!(state, {}, scratch_bubble_text.clone());", quote(&name)),
+                    &format!(
+                        "print_value!(state, {}, scratch_bubble_text.clone());",
+                        quote(&name)
+                    ),
                 );
             }
             line(
@@ -1549,7 +1557,11 @@ fn generate_resumable_statement(
                 indent,
                 &format!(
                     "state.set_speech_bubble(BubbleKind::{}, scratch_bubble_text, Some(wait_deadline));",
-                    if block.opcode == "looks_sayforsecs" { "Say" } else { "Think" }
+                    if block.opcode == "looks_sayforsecs" {
+                        "Say"
+                    } else {
+                        "Think"
+                    }
                 ),
             );
             line(
@@ -1560,7 +1572,11 @@ fn generate_resumable_statement(
                     pc_literal(next_pc)
                 ),
             );
-            line(output, indent, "return ScriptStatus::WaitUntil(wait_deadline);");
+            line(
+                output,
+                indent,
+                "return ScriptStatus::WaitUntil(wait_deadline);",
+            );
         }
         "motion_gotoxy" => {
             let x = expression(

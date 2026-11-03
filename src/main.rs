@@ -98,13 +98,23 @@ fn compile_runtime_module(
         Path::new(input).display(),
         generated
     );
-    fs::write(output, module)?;
+    write_if_changed(output, module.as_bytes())?;
     if fast_math {
         println!("Generated fast-math runtime module {output} from {input}");
     } else {
         println!("Generated runtime module {output} from {input}");
     }
     Ok(())
+}
+
+fn write_if_changed(output: &str, contents: &[u8]) -> Result<(), std::io::Error> {
+    match fs::read(output) {
+        Ok(existing) if existing == contents => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::write(output, contents)
 }
 
 fn compile_tests(fast_math: bool) -> Result<(), Box<dyn Error>> {

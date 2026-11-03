@@ -84,10 +84,12 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         })
     });
     let uses_timed_speech = project.targets.iter().any(|target| {
-        target
-            .blocks
-            .values()
-            .any(|block| matches!(block.opcode.as_str(), "looks_sayforsecs" | "looks_thinkforsecs"))
+        target.blocks.values().any(|block| {
+            matches!(
+                block.opcode.as_str(),
+                "looks_sayforsecs" | "looks_thinkforsecs"
+            )
+        })
     });
     let expire_bubbles = if uses_timed_speech {
         "self.state.expire_speech_bubbles(self.scheduler.now_millis()); "

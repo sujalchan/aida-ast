@@ -111,9 +111,13 @@ mod tests {
         );
         assert!(output.contains("state.change_x_by(scratch_to_number(1.0_f64));"));
         assert!(output.contains("state.request_redraw();"));
-        assert!(output.contains("self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order)"));
+        assert!(
+            output.contains("self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order)")
+        );
         assert!(output.contains("self.scheduler.advance_script_id(id, &mut self.state)"));
-        assert!(output.contains("self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id)"));
+        assert!(output.contains(
+            "self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id)"
+        ));
         assert!(!output.contains("unsupported statement: motion_gotoxy"));
         assert!(!output.contains("unsupported statement: motion_changexby"));
     }
@@ -181,9 +185,17 @@ mod tests {
         let project = parse_project(&json).unwrap();
         let output = generate(&project);
 
-        assert!(output.contains("\n                1 => {\n                    let scratch_bubble_text"));
-        assert!(output.contains("\n                2 => {\n                    let scratch_bubble_text"));
-        assert!(output.contains("\n                3 => {\n                    let scratch_change"));
+        assert!(
+            output
+                .contains("\n                1 => {\n                    let scratch_bubble_text")
+        );
+        assert!(
+            output
+                .contains("\n                2 => {\n                    let scratch_bubble_text")
+        );
+        assert!(
+            output.contains("\n                3 => {\n                    let scratch_change")
+        );
         assert!(output.contains("state.change_shared(0, scratch_change);"));
     }
 

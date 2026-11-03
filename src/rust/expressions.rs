@@ -501,12 +501,18 @@ fn local_block_expression(
                 let left = if fast_math {
                     left.code
                 } else {
-                    format!("scratch_number_operand({})", expression_argument(&left.code))
+                    format!(
+                        "scratch_number_operand({})",
+                        expression_argument(&left.code)
+                    )
                 };
                 let right = if fast_math {
                     right.code
                 } else {
-                    format!("scratch_number_operand({})", expression_argument(&right.code))
+                    format!(
+                        "scratch_number_operand({})",
+                        expression_argument(&right.code)
+                    )
                 };
                 format!("({left} {operator} {right})")
             } else {
@@ -605,10 +611,7 @@ fn local_block_expression(
                     )
                 }
             } else {
-                format!(
-                    "scratch_to_number({})",
-                    expression_argument(&value.code)
-                )
+                format!("scratch_to_number({})", expression_argument(&value.code))
             };
             let operator = field_value(block, "OPERATOR")?.as_str()?;
             let code = match operator {
