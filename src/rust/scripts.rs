@@ -48,7 +48,6 @@ pub(super) fn generate_green_flag_functions(
     let scripts = event_scripts(project);
     if scripts.is_empty() {
         output.push_str("enum GeneratedScript {}\n\nimpl ResumableScript for GeneratedScript {\n    fn step(&mut self, _state: &mut ScratchState, _clock: &dyn Clock) -> ScriptStatus { match *self {} }\n}\n\n");
-        output.push_str("fn new_broadcast_scripts(_message: usize, _state: &ScratchState) -> Vec<GeneratedScript> { Vec::new() }\n\n");
         return;
     }
     let uses_glide = project.targets.iter().any(|target| {

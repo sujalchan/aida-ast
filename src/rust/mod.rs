@@ -28,6 +28,16 @@ mod tests {
     use crate::parser::parse_project;
 
     #[test]
+    fn fixture_without_event_scripts_generates_one_broadcast_dispatcher() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/svg-bitmap.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert_eq!(output.matches("fn new_broadcast_scripts(").count(), 1);
+    }
+
+    #[test]
     fn clone_fixture_lowers_clone_creation_and_clone_start_hats() {
         let input = concat!(
             env!("CARGO_MANIFEST_DIR"),
