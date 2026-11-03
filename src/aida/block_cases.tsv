@@ -119,6 +119,20 @@ motion_scroll_up	statement	{"DISTANCE":[1,[4,"11"]]}	{}	scroll_up 11
 motion_align_scene	statement	{}	{"ALIGNMENT":["alignment choice",null]}	align_scene "alignment choice"
 motion_xscroll	reporter	{}	{}	x_scroll()
 motion_yscroll	reporter	{}	{}	y_scroll()
+pen_clear	statement	{}	{}	clear_pen
+pen_stamp	statement	{}	{}	stamp
+pen_penDown	statement	{}	{}	pen_down
+pen_penUp	statement	{}	{}	pen_up
+pen_setPenColorToColor	statement	{"COLOR":[1,[9,"#123456"]]}	{}	set_pen_color "#123456"
+pen_changePenColorParamBy	statement	{"COLOR_PARAM":[1,[10,"color"]],"VALUE":[1,[4,"11"]]}	{}	change_pen_color "color" by 11
+pen_setPenColorParamTo	statement	{"COLOR_PARAM":[1,[10,"color"]],"VALUE":[1,[4,"11"]]}	{}	set_pen_color "color" to 11
+pen_menu_colorParam	reporter	{}	{"colorParam":["color",null]}	"color"
+pen_changePenSizeBy	statement	{"SIZE":[1,[4,"11"]]}	{}	change_pen_size by 11
+pen_setPenSizeTo	statement	{"SIZE":[1,[4,"11"]]}	{}	set_pen_size 11
+pen_setPenShadeToNumber	statement	{"SHADE":[1,[4,"11"]]}	{}	set_pen_shade 11
+pen_changePenShadeBy	statement	{"SHADE":[1,[4,"11"]]}	{}	change_pen_shade by 11
+pen_setPenHueToNumber	statement	{"HUE":[1,[4,"11"]]}	{}	set_pen_hue 11
+pen_changePenHueBy	statement	{"HUE":[1,[4,"11"]]}	{}	change_pen_hue by 11
 note	reporter	{}	{"NOTE":[60,null]}	60
 operator_add	reporter	{"NUM1":[1,[4,"11"]],"NUM2":[1,[4,"22"]]}	{}	11 + 22
 operator_subtract	reporter	{"NUM1":[1,[4,"11"]],"NUM2":[1,[4,"22"]]}	{}	11 - 22

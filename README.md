@@ -80,6 +80,10 @@ can be represented as AIDA text. The [block support table](scratch-block-support
 lists every catalogued opcode and marks its AIDA-text and Rust-runtime status.
 The [runtime guide](docs/runtime-api.md) describes scheduling and edge cases.
 
+The AIDA text generator also recognizes the Pen extension commands (clear,
+stamp, pen up/down, and pen color, hue, shade, and size changes). These render
+as AIDA text only; the Rust runtime does not implement Pen behavior yet.
+
 ## Current implementation
 
 These links go to the implementation used by this repository:

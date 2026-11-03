@@ -1,6 +1,6 @@
 # Scratch block support
 
-This is a snapshot of AIDA's Scratch 3 block support. The inventory contains the 176 concrete opcodes in [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv) plus the four custom-procedure opcodes covered by procedure tests. It includes core blocks, editor menus and literals, legacy opcodes, AIDA's listed extension examples, and Pen blocks. It does not attempt to list third-party extension opcodes that are not in this repository's catalog.
+This is a snapshot of AIDA's Scratch 3 block support. The inventory contains the 190 concrete opcodes in [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv) plus the four custom-procedure opcodes covered by procedure tests. It includes core blocks, editor menus and literals, legacy opcodes, AIDA's listed extension examples, and Pen blocks. It does not attempt to list third-party extension opcodes that are not in this repository's catalog.
 
 The opcode inventory follows Scratch VM's standard block packages: [control](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_control.js), [data](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_data.js), [events](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_event.js), [looks](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_looks.js), [motion](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_motion.js), [operators](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_operators.js), [procedures](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_procedures.js), [sensing](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sensing.js), and [sound](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sound.js). AIDA's explicit text mappings are in [`src/aida/blocks.rs`](src/aida/blocks.rs); control-flow and procedure rendering is also implemented in [`src/aida.rs`](src/aida.rs) and [`src/aida/procedures.rs`](src/aida/procedures.rs).
 
@@ -16,7 +16,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **176 block cases + 4 procedure opcodes** | **59 implemented ✓, 32 partial -, 89 not implemented x** |
+| **Catalog** | **190 block cases + 4 procedure opcodes** | **59 implemented ✓, 32 partial -, 103 not implemented x** |
 
 ### Control
 
@@ -252,6 +252,29 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `extension_wedo_motor` | ✓ | x |
 | `extension_wedo_tilt_menu` | ✓ | x |
 | `extension_wedo_tilt_reporter` | ✓ | x |
+
+### Pen extension
+
+These opcodes are recognized and rendered by AIDA's text generator. Their Rust
+runtime status remains unsupported (`x`); this table does not claim that the
+headless runtime draws or changes pen state.
+
+| Scratch opcode | AIDA text output | Rust runtime |
+|---|:---:|:---:|
+| `pen_changePenColorParamBy` | ✓ | x |
+| `pen_changePenHueBy` | ✓ | x |
+| `pen_changePenShadeBy` | ✓ | x |
+| `pen_changePenSizeBy` | ✓ | x |
+| `pen_clear` | ✓ | x |
+| `pen_menu_colorParam` | ✓ | x |
+| `pen_penDown` | ✓ | x |
+| `pen_penUp` | ✓ | x |
+| `pen_setPenColorParamTo` | ✓ | x |
+| `pen_setPenColorToColor` | ✓ | x |
+| `pen_setPenHueToNumber` | ✓ | x |
+| `pen_setPenShadeToNumber` | ✓ | x |
+| `pen_setPenSizeTo` | ✓ | x |
+| `pen_stamp` | ✓ | x |
 
 ## Reading this checklist
 
