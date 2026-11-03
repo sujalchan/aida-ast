@@ -26,6 +26,10 @@ pub struct ScratchTarget {
     pub name: String,
     #[serde(rename = "isStage")]
     pub is_stage: bool,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
 
     #[serde(default, deserialize_with = "deserialize_blocks")]
     pub blocks: HashMap<String, ScratchBlock>,

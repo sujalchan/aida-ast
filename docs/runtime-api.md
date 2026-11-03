@@ -28,23 +28,24 @@ own work with script progress. `run()` is a convenience wrapper that continues
 until all scripts complete.
 
 Generated modules also expose `GeneratedProgram::new`, `new_with_clock`,
-`advance`, `duration_until`, `restart`, `is_complete`, `state`, and
-`run_until_complete` for
-applications that need to drive scheduler turns themselves. `advance()` runs
-at most one runnable script and returns `Progressed`, `WaitingUntil(deadline)`
-or `Complete`. A host can schedule a timer for the returned deadline and
-continue processing input and rendering without polling. `step()` remains a
+`advance`, `advance_frame`, `duration_until`, `restart`, `is_complete`, `state`,
+and `run_until_complete` for applications that need to drive scripts
+themselves. `advance()` runs at most one runnable script and returns
+`Progressed`, `WaitingUntil(deadline)` or `Complete`. `advance_frame()` advances
+each runnable script once in frame order, including clone and broadcast scripts
+started during that frame. A host can schedule a timer for the returned deadline
+and continue processing input and rendering without polling. `step()` remains a
 compatibility convenience and returns false when no script can run now; use
 `advance()` when waits must be distinguished from completion.
 
-The headless `aida-runtime` launcher paces scheduler turns at 30 FPS by default
-(about 33.333 ms per tick). Pass `--fps 60` to select another positive finite
+The headless `aida-runtime` launcher paces frames at 30 FPS by default (about
+33.333 ms per frame). Pass `--fps <number>` to select another positive finite
 rate, or `--turbo` to remove intentional frame pacing. The launcher measures
-each tick with a monotonic clock and sleeps only for the remainder of its
-target duration. Slow ticks do not accumulate catch-up work. Turbo still
-honors Scratch waits and sleeps until the next script deadline when nothing is
-runnable. The scheduler's `GeneratedProgram::advance()` stays independent of
-this pacing policy for hosts that have their own event loop.
+each frame with a monotonic clock and sleeps only for the remainder of its
+target duration. Slow frames do not accumulate catch-up work. Turbo uses the
+single-script `advance()` path, still honors Scratch waits, and sleeps until the
+next script deadline when nothing is runnable. Paced execution and turbo can
+therefore produce different script interleavings.
 
 Use the flags with `./run.sh [path/to/project.sb3] --fps 60` or
 `./run.sh [path/to/project.sb3] --turbo`. When launching the generated runtime
@@ -179,6 +180,16 @@ The generator currently lowers:
 - Loop statements: `control_repeat`, `control_repeat_until`, `control_while`,
   and `control_forever`. Their substacks are resumable; repeat counts use
   Scratch rounding, and boolean conditions use Scratch truth rules.
+- `control_stop`: `this script` completes the current script, unwinding one
+  custom-procedure frame when called inside a procedure; `other scripts in
+  sprite` stops peer scripts on the current sprite or clone; `all` stops all
+  scripts and removes clones.
+- Clone blocks: `control_create_clone_of`, `control_start_as_clone`, and
+  `control_delete_this_clone`. Clones inherit their source's position,
+  clone-local variables, and lists; deleting a clone removes its active scripts.
+- Broadcast blocks: `event_broadcast`, `event_broadcastandwait`, and
+  `event_whenbroadcastreceived`. Broadcast receivers can restart, and waiting
+  senders resume after matching receiver runs finish.
 - `control_wait`: evaluates its duration once, stores an absolute wake deadline
   in the current script frame, and suspends only that script. A zero-duration
   wait still yields once. Waiting scripts do not occupy scheduler turns.
@@ -187,6 +198,8 @@ The generator currently lowers:
 - `looks_say` statements: emitted as `print_value!(name, expression)` at the same
   point in the script. For variable reporters, the macro prints the Scratch
   variable name and its value using Rust `Debug` formatting.
+- Motion statements: `motion_gotoxy` and `motion_changexby` update the current
+  sprite or clone's stored position. This headless runtime has no renderer.
 - Arithmetic reporters: add, subtract, multiply, divide, and modulo.
 - Comparison and boolean reporters: equals, greater than, less than, AND, OR,
   and NOT.
@@ -198,7 +211,7 @@ The generator currently lowers:
   replace, get, item number, length, contains, contents, show, and hide. List
   identity is resolved from the Scratch list ID, so equal names in separate
   targets remain separate lists. Mutations use the same shared state as
-  scheduled scripts.
+  scheduled scripts. Clone-local list copies are isolated per clone.
 
 `ScratchList` stores typed `ScratchValue`s in a `Vec`, uses Scratch's one-based
 indices and `last`/`random`/`any`/`all` index forms where applicable, and caps
@@ -207,8 +220,7 @@ valid position in a full list inserts the new value and drops the old tail;
 appending beyond the limit is ignored. Invalid reads return empty text, while
 invalid mutation indices have no effect. List monitor visibility is runtime
 state separate from list contents. Saved monitor visibility is not loaded and
-there is no graphics/monitor UI yet. Sprite clone-local list copies are not
-implemented because clone support is not present.
+there is no graphics/monitor UI yet.
 
 List conversion and limit behavior were checked against Scratch VM
 `v5.0.301-spork.1` (`cf22eeb`), especially
@@ -235,8 +247,10 @@ available when a repeatable sequence is needed.
 
 An unsupported reporter or malformed input emits a typed `todo!()` expression;
 an unsupported statement emits `todo!()` as a statement. These compile, but
-panic if execution reaches them. Lists and control blocks other than the listed
-loops and `control_wait_until` are not yet lowered by this Rust generator.
+panic if execution reaches them. See the [block support table](../scratch-block-support.md)
+for the current opcode-by-opcode status. Motion support is limited to
+`motion_gotoxy` and `motion_changexby`; other motion, visual, sensing, sound,
+and extension behaviors are not simulated.
 
 Normal and warp custom block calls use resumable procedure frames with owned
 `ScratchValue` arguments. Normal loop boundaries yield while preserving the
@@ -250,7 +264,7 @@ pending. The generated frame stores the evaluated deadline and the scheduler
 reports the earliest deadline when all scripts are waiting. Inside warp mode,
 the VM suppresses ordinary yields until its time budget expires; this
 implementation follows that behavior by polling the wait at safe points until
-the warp safeguard yields. Broadcast and broadcast-and-wait are deferred.
+the warp safeguard yields.
 
 The blocking `run()` wrapper sleeps until the next deadline when every active
 script is waiting. Event-loop hosts should use `advance()` and schedule the

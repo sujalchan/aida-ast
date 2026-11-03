@@ -60,10 +60,25 @@ generator renders a readable intermediate form. The Rust generator emits
 resumable scripts and project state for the runtime, using runtime helpers for
 Scratch value conversions, operators, waits, broadcasts, clones, and scheduling.
 
-See the [currently implemented Scratch blocks](scratch-block-support.md) for
-the full opcode list and separate status for AIDA text generation and Rust
-runtime behavior. The [runtime API and generated-code guide](docs/runtime-api.md)
-describes the generated module contract and current limitations.
+### Implemented Rust blocks
+
+The Rust backend currently executes:
+
+- **Control:** conditionals, repeat/while/forever loops, waits, all `control_stop`
+  options, clone creation/deletion, and custom procedure calls.
+- **Events:** green-flag scripts, broadcasts, broadcast-and-wait, and clone-start
+  scripts.
+- **Data:** variables and lists, including clone-local variables and lists.
+- **Looks:** `looks_say`, written to the console.
+- **Motion:** `motion_gotoxy` and `motion_changexby`, with per-sprite and
+  per-clone positions.
+- **Operators:** arithmetic, comparisons, boolean and text reporters, random,
+  rounding, and Scratch math reporters.
+
+This is the executable Rust backend list, not the broader set of blocks that
+can be represented as AIDA text. The [block support table](scratch-block-support.md)
+lists every catalogued opcode and marks its AIDA-text and Rust-runtime status.
+The [runtime guide](docs/runtime-api.md) describes scheduling and edge cases.
 
 ## Current implementation
 

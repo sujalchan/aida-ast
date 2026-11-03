@@ -16,7 +16,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **176 block cases + 4 procedure opcodes** | **56 implemented ✓, 32 partial -, 92 not implemented x** |
+| **Catalog** | **176 block cases + 4 procedure opcodes** | **59 implemented ✓, 32 partial -, 89 not implemented x** |
 
 ### Control
 
@@ -36,7 +36,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `control_repeat` | ✓ | ✓ |
 | `control_repeat_until` | ✓ | ✓ |
 | `control_start_as_clone` | ✓ | ✓ |
-| `control_stop` | ✓ | x |
+| `control_stop` | ✓ | ✓ |
 | `control_wait` | ✓ | ✓ |
 | `control_wait_until` | ✓ | ✓ |
 | `control_while` | ✓ | ✓ |
@@ -118,7 +118,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
 | `motion_align_scene` | ✓ | x |
-| `motion_changexby` | ✓ | x |
+| `motion_changexby` | ✓ | ✓ |
 | `motion_changeyby` | ✓ | x |
 | `motion_direction` | ✓ | x |
 | `motion_glidesecstoxy` | ✓ | - |
@@ -126,7 +126,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `motion_glideto_menu` | ✓ | - |
 | `motion_goto` | ✓ | x |
 | `motion_goto_menu` | ✓ | - |
-| `motion_gotoxy` | ✓ | x |
+| `motion_gotoxy` | ✓ | ✓ |
 | `motion_ifonedgebounce` | ✓ | x |
 | `motion_movesteps` | ✓ | x |
 | `motion_pointindirection` | ✓ | x |
@@ -255,6 +255,6 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 
 ## Reading this checklist
 
-The Rust runtime is headless. For example, `looks_say` writes to the console, while unsupported visual, sensing, audio, and extension blocks are not simulated. Some menus and procedure definitions are data used by their parent/call blocks rather than runnable commands.
+The Rust runtime is headless. For example, `looks_say` writes to the console. The motion subset stores per-instance x/y positions; it does not render sprites. Unsupported visual, sensing, audio, and extension blocks are not simulated. Some menus and procedure definitions are data used by their parent/call blocks rather than runnable commands.
 
 The counts and marks are a manually reviewed snapshot. Update this file when the Rust block generator or runtime gains or loses support.

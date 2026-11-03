@@ -1243,6 +1243,28 @@ fn generate_resumable_statement(
                 ),
             );
         }
+        "control_stop" => match field_value(block, "STOP_OPTION").and_then(Value::as_str) {
+            Some("all") => line(output, indent, "return ScriptStatus::StopAll;"),
+            Some("this script") => {
+                line(
+                    output,
+                    indent,
+                    "if script.frames.len() > 1 { script.frames.pop(); continue; } return ScriptStatus::Complete;",
+                );
+            }
+            Some("other scripts in sprite") | Some("other scripts in stage") => {
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "script.frames.last_mut().unwrap().pc = {};",
+                        pc_literal(next_pc)
+                    ),
+                );
+                line(output, indent, "return ScriptStatus::StopOtherScripts;");
+            }
+            _ => {}
+        },
         "data_addtolist" => {
             if let Some(list) = list_field(block, "LIST", lists) {
                 let input = block.inputs.get("ITEM");
@@ -1442,6 +1464,44 @@ fn generate_resumable_statement(
                 output,
                 indent,
                 &format!("print_value!({}, {value});", quote(&name)),
+            );
+        }
+        "motion_gotoxy" => {
+            let x = expression(
+                target,
+                block.inputs.get("X"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            let y = expression(
+                target,
+                block.inputs.get("Y"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent,
+                &format!("state.set_xy(scratch_to_number({x}), scratch_to_number({y}));"),
+            );
+        }
+        "motion_changexby" => {
+            let dx = expression(
+                target,
+                block.inputs.get("DX"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent,
+                &format!("state.change_x_by(scratch_to_number({dx}));"),
             );
         }
         "control_create_clone_of" => {

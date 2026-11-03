@@ -45,6 +45,8 @@ fn target(blocks: Vec<(&str, ScratchBlock)>) -> ScratchTarget {
     ScratchTarget {
         name: "Sprite1".to_owned(),
         is_stage: false,
+        x: 0.0,
+        y: 0.0,
         blocks: blocks
             .into_iter()
             .map(|(id, block)| (id.to_owned(), block))

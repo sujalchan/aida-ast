@@ -170,6 +170,14 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
                 target.is_stage
             ),
         );
+        line(
+            &mut output,
+            1,
+            &format!(
+                "state.set_original_xy({target_index}, {}_f64, {}_f64);",
+                target.x, target.y
+            ),
+        );
     }
 
     output.push_str("let scripts = new_scripts();\nlet scheduler = match clock { Some(clock) => ScriptScheduler::with_clock(scripts, clock), None => ScriptScheduler::new(scripts) };\n");
@@ -177,14 +185,16 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     output.push_str(
         "    pub fn step(&mut self) -> bool { self.advance() == SchedulerStatus::Progressed }\n",
     );
-    output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state);");
+    output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state); self.process_after_step(); status }\n");
+    output.push_str("    fn process_after_step(&mut self) {");
     if uses_broadcasts {
         output.push_str(" if let Some((sender, message, wait)) = self.scheduler.take_broadcast() { let receivers = new_broadcast_scripts(message, &self.state); self.scheduler.broadcast(sender, receivers, wait); }");
     }
     if uses_clones {
         output.push_str(" let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } }");
     }
-    output.push_str(" status }\n");
+    output.push_str(" }\n");
+    output.push_str("    pub fn advance_frame(&mut self) -> SchedulerStatus { let mut script_ids = self.scheduler.script_ids_in_frame_order(); let mut cursor = 0; let mut progressed = false; while cursor < script_ids.len() { let id = script_ids[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) { if status == SchedulerStatus::Complete { return status; } progressed = true; self.process_after_step(); for id in self.scheduler.script_ids_in_frame_order() { if !script_ids.contains(&id) { script_ids.push(id); } } } } if progressed { SchedulerStatus::Progressed } else { self.scheduler.idle_status() } }\n");
     output.push_str("    pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }\n");
     output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }\n");
     output.push_str(
@@ -194,7 +204,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         "    pub fn active_script_count(&self) -> usize { self.scheduler.active_scripts() }\n",
     );
     output.push_str("    pub fn state(&self) -> &ScratchState { &self.state }\n");
-    output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }\n}\n\n");
+    output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance_frame() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }\n}\n\n");
     output.push_str("#[allow(dead_code)]\npub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
     let identifiers = rust_identifiers(&output);
     let imports = runtime_imports(&identifiers);

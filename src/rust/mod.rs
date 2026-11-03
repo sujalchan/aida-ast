@@ -76,6 +76,62 @@ mod tests {
     }
 
     #[test]
+    fn stop_loop_fixture_lowers_this_script_inside_a_custom_block_and_stop_all() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/stop-loop-test.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("if script.frames.len() > 1 { script.frames.pop(); continue; }"));
+        assert!(output.contains("return ScriptStatus::StopAll;"));
+        assert!(!output.contains("unsupported statement: control_stop"));
+    }
+
+    #[test]
+    fn clone_stop_fixture_lowers_motion_for_target_instances() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/clone-stop-test.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(
+            output.contains(
+                "state.set_xy(scratch_to_number(-240.0_f64), scratch_to_number(0.0_f64));"
+            )
+        );
+        assert!(output.contains("state.change_x_by(scratch_to_number(1.0_f64));"));
+        assert!(output.contains("self.scheduler.script_ids_in_frame_order()"));
+        assert!(output.contains("self.scheduler.advance_script_id(id, &mut self.state)"));
+        assert!(!output.contains("unsupported statement: motion_gotoxy"));
+        assert!(!output.contains("unsupported statement: motion_changexby"));
+    }
+
+    #[test]
+    fn stop_other_scripts_in_sprite_keeps_the_current_script_continuation() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1",
+                    "isStage": false,
+                    "variables": {},
+                    "blocks": {
+                        "hat": {"opcode": "event_whenflagclicked", "next": "stop", "topLevel": true, "inputs": {}, "fields": {}},
+                        "stop": {"opcode": "control_stop", "next": "say", "parent": "hat", "inputs": {}, "fields": {"STOP_OPTION": ["other scripts in sprite", null]}},
+                        "say": {"opcode": "looks_say", "next": null, "parent": "stop", "inputs": {"MESSAGE": [1, [10, "after stop"]]}, "fields": {}}
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("return ScriptStatus::StopOtherScripts;"));
+        assert!(output.contains("pc = 1;"));
+        assert!(!output.contains("unsupported statement: control_stop"));
+    }
+
+    #[test]
     fn generated_helpers_and_imports_follow_project_usage() {
         let project_json = json!({
             "targets": [{
