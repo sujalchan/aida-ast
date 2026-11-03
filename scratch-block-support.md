@@ -1,6 +1,6 @@
 # Scratch block support
 
-This is a snapshot of AIDA's Scratch 3 block support. The inventory contains the 190 concrete opcodes in [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv) plus the four custom-procedure opcodes covered by procedure tests. It includes core blocks, editor menus and literals, legacy opcodes, AIDA's listed extension examples, and Pen blocks. It does not attempt to list third-party extension opcodes that are not in this repository's catalog.
+This is a snapshot of AIDA's Scratch 3 block support. The table lists 180 core, editor-menu, literal, legacy, and Pen opcodes from [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv), plus the four custom-procedure opcodes covered by procedure tests. It intentionally omits the extension-example opcodes and does not list third-party extensions.
 
 The opcode inventory follows Scratch VM's standard block packages: [control](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_control.js), [data](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_data.js), [events](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_event.js), [looks](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_looks.js), [motion](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_motion.js), [operators](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_operators.js), [procedures](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_procedures.js), [sensing](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sensing.js), and [sound](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sound.js). AIDA's explicit text mappings are in [`src/aida/blocks.rs`](src/aida/blocks.rs); control-flow and procedure rendering is also implemented in [`src/aida.rs`](src/aida.rs) and [`src/aida/procedures.rs`](src/aida/procedures.rs).
 
@@ -16,7 +16,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **190 block cases + 4 procedure opcodes** | **78 implemented ✓, 27 partial -, 89 not implemented x** |
+| **Catalog** | **180 block cases + 4 procedure opcodes** | **78 implemented ✓, 27 partial -, 79 not implemented x** |
 
 ### Control
 
@@ -237,21 +237,6 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `matrix` | ✓ | - |
 | `note` | ✓ | - |
 | `text` | ✓ | ✓ |
-
-### Extension examples
-
-| Scratch opcode | AIDA text output | Rust runtime |
-|---|:---:|:---:|
-| `extension_microbit_display` | ✓ | x |
-| `extension_music_drum` | ✓ | x |
-| `extension_music_play_note` | ✓ | x |
-| `extension_music_reporter` | ✓ | x |
-| `extension_pen_down` | ✓ | x |
-| `extension_wedo_boolean` | ✓ | x |
-| `extension_wedo_hat` | ✓ | x |
-| `extension_wedo_motor` | ✓ | x |
-| `extension_wedo_tilt_menu` | ✓ | x |
-| `extension_wedo_tilt_reporter` | ✓ | x |
 
 ### Pen extension
 
