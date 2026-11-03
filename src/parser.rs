@@ -41,6 +41,10 @@ pub struct ScratchMonitor {
     #[serde(default)]
     pub y: f64,
     #[serde(default)]
+    pub width: f64,
+    #[serde(default)]
+    pub height: f64,
+    #[serde(default)]
     pub visible: bool,
     #[serde(default, rename = "sliderMin")]
     pub slider_min: f64,

@@ -7,16 +7,16 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 ## Status key
 
 - **✓**: AIDA generates Scratch-specific AIDA text, or the Rust backend implements the block's runtime behavior.
-- **-**: AIDA renders the block, but Rust support is structural, partial, or compile-time only. This includes menu blocks, event hats that are not started by the runtime, and list visibility without a visual monitor.
+- **-**: AIDA renders the block, but it is structural/menu data, only works as a parent block input, or has no event source in the current runtime. This includes procedure definition blocks, menu shadows, click hats, and greater-than sensor hats.
 - **x**: the Rust runtime backend has no implementation; generated code reaches an unsupported-block placeholder if the block executes.
 
 `AIDA text output` is a translation format, not an execution engine. A check in that column means the block has a text representation; it does not imply Scratch VM-equivalent runtime behavior. Runtime status is based on the generated Rust implementation in [`src/rust/expressions.rs`](src/rust/expressions.rs), [`src/rust/statements.rs`](src/rust/statements.rs), and [`src/rust/scripts.rs`](src/rust/scripts.rs). These marks describe implemented code paths, not a guarantee of parity for every Scratch edge case.
 
-Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `event_whenbroadcastreceived`. The scheduler starts matching receivers, restarts an already active receiver when the same message is sent again, and waits for the started receiver runs for broadcast-and-wait. Matching receivers are created for live clones too; deleting a clone removes its scripts and releases senders waiting for them. The `broadcast-test.sb3` fixture exercises these paths, including a receiver that calls a waiting custom block. Other event hats remain partial when the headless runtime has no source for their events, such as keyboard and click input.
+Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `event_whenbroadcastreceived`. The scheduler starts matching receivers, restarts an already active receiver when the same message is sent again, and waits for the started receiver runs for broadcast-and-wait. Matching receivers are created for live clones too; deleting a clone removes its scripts and releases senders waiting for them. The `broadcast-test.sb3` fixture exercises these paths, including a receiver that calls a waiting custom block. Keyboard hats and key/mouse reporters work in graphical mode. Backdrop-switch hats run when a different backdrop is selected. Click hats and greater-than sensor hats remain partial because AIDA does not yet generate those event sources.
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **190 block cases + 4 procedure opcodes** | **67 implemented ✓, 31 partial -, 96 not implemented x** |
+| **Catalog** | **190 block cases + 4 procedure opcodes** | **78 implemented ✓, 27 partial -, 89 not implemented x** |
 
 ### Control
 
@@ -49,7 +49,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `data_changevariableby` | ✓ | ✓ |
 | `data_deletealloflist` | ✓ | ✓ |
 | `data_deleteoflist` | ✓ | ✓ |
-| `data_hidelist` | ✓ | - |
+| `data_hidelist` | ✓ | ✓ |
 | `data_hidevariable` | ✓ | x |
 | `data_insertatlist` | ✓ | ✓ |
 | `data_itemnumoflist` | ✓ | ✓ |
@@ -61,7 +61,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `data_listindexrandom` | ✓ | - |
 | `data_replaceitemoflist` | ✓ | ✓ |
 | `data_setvariableto` | ✓ | ✓ |
-| `data_showlist` | ✓ | - |
+| `data_showlist` | ✓ | ✓ |
 | `data_showvariable` | ✓ | x |
 | `data_variable` | ✓ | ✓ |
 
@@ -73,11 +73,11 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `event_broadcast_menu` | ✓ | - |
 | `event_broadcastandwait` | ✓ | ✓ |
 | `event_touchingobjectmenu` | ✓ | - |
-| `event_whenbackdropswitchesto` | ✓ | - |
+| `event_whenbackdropswitchesto` | ✓ | ✓ |
 | `event_whenbroadcastreceived` | ✓ | ✓ |
 | `event_whenflagclicked` | ✓ | ✓ |
 | `event_whengreaterthan` | ✓ | - |
-| `event_whenkeypressed` | ✓ | - |
+| `event_whenkeypressed` | ✓ | ✓ |
 | `event_whenstageclicked` | ✓ | - |
 | `event_whenthisspriteclicked` | ✓ | - |
 | `event_whentouchingobject` | ✓ | - |
@@ -86,7 +86,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| `looks_backdropnumbername` | ✓ | x |
+| `looks_backdropnumbername` | ✓ | ✓ |
 | `looks_backdrops` | ✓ | - |
 | `looks_changeeffectby` | ✓ | x |
 | `looks_changesizeby` | ✓ | x |
@@ -98,7 +98,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `looks_gotofrontback` | ✓ | x |
 | `looks_hide` | ✓ | x |
 | `looks_hideallsprites` | ✓ | x |
-| `looks_nextbackdrop` | ✓ | x |
+| `looks_nextbackdrop` | ✓ | ✓ |
 | `looks_nextcostume` | ✓ | x |
 | `looks_say` | ✓ | ✓ |
 | `looks_sayforsecs` | ✓ | ✓ |
@@ -107,7 +107,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `looks_setstretchto` | ✓ | x |
 | `looks_show` | ✓ | x |
 | `looks_size` | ✓ | x |
-| `looks_switchbackdropto` | ✓ | x |
+| `looks_switchbackdropto` | ✓ | ✓ |
 | `looks_switchbackdroptoandwait` | ✓ | x |
 | `looks_switchcostumeto` | ✓ | x |
 | `looks_think` | ✓ | ✓ |
@@ -179,12 +179,12 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `sensing_distanceto` | ✓ | x |
 | `sensing_distancetomenu` | ✓ | - |
 | `sensing_keyoptions` | ✓ | - |
-| `sensing_keypressed` | ✓ | x |
+| `sensing_keypressed` | ✓ | ✓ |
 | `sensing_loud` | ✓ | x |
 | `sensing_loudness` | ✓ | x |
-| `sensing_mousedown` | ✓ | x |
-| `sensing_mousex` | ✓ | x |
-| `sensing_mousey` | ✓ | x |
+| `sensing_mousedown` | ✓ | ✓ |
+| `sensing_mousex` | ✓ | ✓ |
+| `sensing_mousey` | ✓ | ✓ |
 | `sensing_of` | ✓ | x |
 | `sensing_of_object_menu` | ✓ | - |
 | `sensing_resettimer` | ✓ | x |
@@ -278,6 +278,6 @@ headless runtime draws or changes pen state.
 
 ## Reading this checklist
 
-The Rust runtime is headless. For example, `looks_say` writes to the console. The motion subset stores per-instance x/y positions; it does not render sprites. Unsupported visual, sensing, audio, and extension blocks are not simulated. Some menus and procedure definitions are data used by their parent/call blocks rather than runnable commands.
+The Rust runtime can run headless or with the graphical renderer. `looks_say` writes its value to the console and displays a speech bubble in graphical mode; think bubbles work the same way without console output. Implemented motion updates sprite and clone positions and renders them, and implemented backdrop switching updates the stage. Variable/list data, clone state, broadcasts, waits, and supported event hats are integrated with the scheduler. Other visual effects, costume changes, sound, pen blocks, and unsupported sensing remain unsimulated. Some menu blocks and procedure definition blocks are structural data used by their parent or call block rather than runnable commands.
 
 The counts and marks are a manually reviewed snapshot. Update this file when the Rust block generator or runtime gains or loses support.

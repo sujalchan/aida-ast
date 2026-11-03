@@ -178,6 +178,15 @@ fn block_expression(
         "data_listcontents" => list_field(block, "LIST", lists)
             .map(|list| format!("state.list({}).contents()", list.slot))
             .unwrap_or_else(|| unsupported_expression("missing list reference")),
+        "looks_backdrops" => field_value(block, "BACKDROP")
+            .map(text_literal)
+            .unwrap_or_else(|| unsupported_expression("missing backdrop menu value")),
+        "looks_backdropnumbername" => {
+            let number = field_value(block, "NUMBER_NAME")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == "number");
+            format!("state.backdrop_number_name({number})")
+        }
         "data_itemoflist" => list_field(block, "LIST", lists)
             .map(|list| format!("state.list({}).get({})", list.slot, input("INDEX", active)))
             .unwrap_or_else(|| unsupported_expression("missing list reference")),

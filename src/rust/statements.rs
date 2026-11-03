@@ -535,6 +535,32 @@ fn generate_resumable_block(
                 "return ScriptStatus::WaitUntil(wait_deadline);",
             );
         }
+        "looks_switchbackdropto" | "looks_nextbackdrop" => {
+            generate_resumable_statement(
+                target,
+                block,
+                next_pc,
+                variables,
+                lists,
+                arguments,
+                output,
+                indent + 1,
+            );
+            line(
+                output,
+                indent + 1,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    pc_literal(next_pc)
+                ),
+            );
+            line(
+                output,
+                indent + 1,
+                "if state.redraw_requested() { return ScriptStatus::Yield; }",
+            );
+            line(output, indent + 1, "continue;");
+        }
         "motion_glideto" | "motion_glidesecstoxy" => generate_resumable_statement(
             target,
             block,
@@ -1062,7 +1088,12 @@ fn is_straight_line_block(block: &ScratchBlock) -> bool {
     !block.opcode.starts_with("control_")
         && !matches!(
             block.opcode.as_str(),
-            "motion_glideto" | "motion_glidesecstoxy" | "looks_sayforsecs" | "looks_thinkforsecs"
+            "motion_glideto"
+                | "motion_glidesecstoxy"
+                | "looks_sayforsecs"
+                | "looks_thinkforsecs"
+                | "looks_switchbackdropto"
+                | "looks_nextbackdrop"
         )
         && block.opcode != "procedures_call"
         && block.opcode != "event_broadcast"
@@ -1523,6 +1554,18 @@ fn generate_resumable_statement(
                 line(output, indent, "todo!(\"missing variable reference\");");
             }
         }
+        "looks_switchbackdropto" => {
+            let value = expression(
+                target,
+                block.inputs.get("BACKDROP"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(output, indent, &format!("state.switch_backdrop({value});"));
+        }
+        "looks_nextbackdrop" => line(output, indent, "state.next_backdrop();"),
         "looks_say" | "looks_think" => {
             let value = expression(
                 target,

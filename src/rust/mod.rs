@@ -25,7 +25,7 @@ mod tests {
     use serde_json::json;
 
     use super::generate;
-    use crate::parser::parse_project;
+    use crate::parser::{ScratchBlock, parse_project};
 
     #[test]
     fn fixture_without_event_scripts_generates_one_broadcast_dispatcher() {
@@ -86,6 +86,34 @@ mod tests {
         ));
         assert!(!output.contains("unsupported statement: event_broadcast"));
         assert!(!output.contains("unsupported statement: event_broadcastandwait"));
+    }
+
+    #[test]
+    fn backdrop_switch_fixture_routes_events_to_stage_backdrop_hats() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/think.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let mut project = parse_project(&json).unwrap();
+        let stage = project
+            .targets
+            .iter_mut()
+            .find(|target| target.is_stage)
+            .unwrap();
+        stage.blocks.insert(
+            "backdrop_hat".to_owned(),
+            ScratchBlock {
+                opcode: "event_whenbackdropswitchesto".to_owned(),
+                top_level: true,
+                fields: [("BACKDROP".to_owned(), json!(["backdrop1", null]))].into(),
+                ..ScratchBlock::default()
+            },
+        );
+
+        let output = generate(&project);
+
+        assert!(output.contains("fn new_backdrop_scripts(backdrop: &str, state: &ScratchState)"));
+        assert!(output.contains("\"backdrop1\" => { for instance in state.instances_for_target("));
+        assert!(output.contains("backdrop_receiver_script_stage_"));
+        assert!(output.contains("if state.redraw_requested() { return ScriptStatus::Yield; }"));
     }
 
     #[test]

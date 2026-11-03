@@ -249,6 +249,43 @@ pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
             "#[allow(dead_code, unused_variables, unused_mut)]\nfn new_broadcast_scripts(message: usize, state: &ScratchState) -> Vec<GeneratedScript> {{ let mut scripts = Vec::new(); match message {{ {receiver_match} }} scripts }}\n",
         ),
     );
+    let mut backdrop_groups = BTreeMap::<String, Vec<&GreenFlagScript<'_>>>::new();
+    for script in &scripts {
+        if let Some(name) = &script.backdrop_name {
+            backdrop_groups
+                .entry(name.clone())
+                .or_default()
+                .push(script);
+        }
+    }
+    let backdrop_arms = backdrop_groups
+        .into_iter()
+        .map(|(name, receivers)| {
+            let starters = receivers
+                .into_iter()
+                .map(|script| {
+                    format!(
+                        "for instance in state.instances_for_target({}) {{ scripts.push(new_{}_for(instance)); }}",
+                        script.target_index, script.function
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{} => {{ {} }}", quote(&name), starters)
+        })
+        .collect::<Vec<_>>();
+    let backdrop_match = if backdrop_arms.is_empty() {
+        "_ => {}".to_owned()
+    } else {
+        format!("{}, _ => {{}}", backdrop_arms.join(", "))
+    };
+    line(
+        output,
+        0,
+        &format!(
+            "#[allow(dead_code, unused_variables, unused_mut)]\nfn new_backdrop_scripts(backdrop: &str, state: &ScratchState) -> Vec<GeneratedScript> {{ let mut scripts = Vec::new(); match backdrop {{ {backdrop_match} }} scripts }}\n"
+        ),
+    );
     let mut key_groups = BTreeMap::<String, Vec<&GreenFlagScript<'_>>>::new();
     for script in &scripts {
         if script.hat.opcode != "event_whenkeypressed" {
@@ -370,6 +407,7 @@ struct GreenFlagScript<'a> {
     function: String,
     target_index: usize,
     broadcast_message: Option<String>,
+    backdrop_name: Option<String>,
 }
 
 fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
@@ -383,12 +421,14 @@ fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
                     | "control_start_as_clone"
                     | "event_whenbroadcastreceived"
                     | "event_whenkeypressed"
+                    | "event_whenbackdropswitchesto"
             )
         }) {
             let function_type = match hat.opcode.as_str() {
                 "event_whenflagclicked" => "green_flag_script",
                 "control_start_as_clone" => "clone_start_script",
                 "event_whenkeypressed" => "key_pressed_script",
+                "event_whenbackdropswitchesto" => "backdrop_receiver_script",
                 _ => "broadcast_receiver_script",
             };
             let function = format!("{function_type}_{target_name}_{}", scripts.len() + 1);
@@ -400,6 +440,16 @@ fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
                 target_index,
                 broadcast_message: if hat.opcode == "event_whenbroadcastreceived" {
                     broadcast_message(project, hat)
+                } else {
+                    None
+                },
+                backdrop_name: if hat.opcode == "event_whenbackdropswitchesto" {
+                    hat.fields
+                        .get("BACKDROP")
+                        .and_then(Value::as_array)
+                        .and_then(|field| field.first())
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
                 } else {
                     None
                 },
@@ -499,6 +549,7 @@ fn event_hats(target: &ScratchTarget) -> Vec<(&str, &crate::parser::ScratchBlock
                         | "event_whenstageclicked"
                         | "event_whenkeypressed"
                         | "event_whenbroadcastreceived"
+                        | "event_whenbackdropswitchesto"
                         | "control_start_as_clone"
                 )
         })

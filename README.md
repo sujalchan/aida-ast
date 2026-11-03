@@ -62,27 +62,34 @@ Scratch value conversions, operators, waits, broadcasts, clones, and scheduling.
 
 ### Implemented Rust blocks
 
-The Rust backend currently executes:
+The Rust backend currently executes these supported groups:
 
-- **Control:** conditionals, repeat/while/forever loops, waits, all `control_stop`
-  options, clone creation/deletion, and custom procedure calls.
-- **Events:** green-flag scripts, broadcasts, broadcast-and-wait, and clone-start
-  scripts.
-- **Data:** variables and lists, including clone-local variables and lists.
-- **Looks:** `looks_say`, written to the console.
-- **Motion:** `motion_gotoxy` and `motion_changexby`, with per-sprite and
-  per-clone positions.
+- **Control:** conditionals, repeat/while/forever loops, waits, all
+  `control_stop` options, clone creation/deletion, and custom procedure calls,
+  including warp procedures.
+- **Events:** green-flag, broadcast, broadcast-and-wait, clone-start, key-press,
+  and backdrop-switch scripts. Click and greater-than sensor hats do not yet
+  start scripts.
+- **Data:** shared stage variables, sprite-local and clone-local variables,
+  lists, and list monitor visibility. Dynamic show/hide blocks for scalar
+  variable monitors are not implemented.
+- **Looks:** say/think bubbles (including timed versions), backdrop selection
+  and cycling, and the backdrop number/name reporter. Graphical mode renders
+  the bubbles and selected backdrop; `say` also emits its value to the console.
+- **Motion:** go to x/y, go to a named or random position, change x/y, and timed
+  glides, with per-sprite and per-clone positions rendered in graphical mode.
 - **Operators:** arithmetic, comparisons, boolean and text reporters, random,
-  rounding, and Scratch math reporters.
+  rounding, and the supported Scratch math operations.
+- **Sensing:** key state and mouse state/position use graphical input; the
+  timer works in both graphical and headless modes.
 
 This is the executable Rust backend list, not the broader set of blocks that
 can be represented as AIDA text. The [block support table](scratch-block-support.md)
 lists every catalogued opcode and marks its AIDA-text and Rust-runtime status.
 The [runtime guide](docs/runtime-api.md) describes scheduling and edge cases.
 
-The AIDA text generator also recognizes the Pen extension commands (clear,
-stamp, pen up/down, and pen color, hue, shade, and size changes). These render
-as AIDA text only; the Rust runtime does not implement Pen behavior yet.
+The AIDA text generator recognizes the catalogued Pen and other extension
+commands, but the Rust runtime does not execute those extension blocks yet.
 
 ## Current implementation
 
