@@ -51,6 +51,7 @@ fn target(blocks: Vec<(&str, ScratchBlock)>) -> ScratchTarget {
             .collect(),
         variables: Default::default(),
         lists: Default::default(),
+        broadcasts: Default::default(),
     }
 }
 

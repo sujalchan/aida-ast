@@ -45,6 +45,35 @@ mod tests {
     }
 
     #[test]
+    fn broadcast_fixture_resolves_message_ids_and_emits_restartable_receiver_hats() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/broadcast-test.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(
+            output.contains(
+                "message: broadcast_message_key(scratch_string(\"message1\")), wait: false"
+            )
+        );
+        assert!(
+            output.contains(
+                "message: broadcast_message_key(scratch_string(\"message1\")), wait: true"
+            )
+        );
+        assert!(
+            output.contains(
+                "message: broadcast_message_key(scratch_string(\"message2\")), wait: false"
+            )
+        );
+        assert!(output.contains("1 => { for instance in state.instances_for_target(2)"));
+        assert!(output.contains("2 => { for instance in state.instances_for_target(1)"));
+        assert!(output.contains("fn broadcast_receiver(&self) -> Option<(usize, usize, usize)>"));
+        assert!(!output.contains("unsupported statement: event_broadcast"));
+        assert!(!output.contains("unsupported statement: event_broadcastandwait"));
+    }
+
+    #[test]
     fn generated_helpers_and_imports_follow_project_usage() {
         let project_json = json!({
             "targets": [{

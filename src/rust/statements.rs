@@ -588,6 +588,7 @@ fn generate_resumable_block(
             generate_resumable_statement(
                 target,
                 block,
+                next_pc,
                 variables,
                 lists,
                 arguments,
@@ -673,6 +674,11 @@ fn generate_resumable_block_chain(
         generate_resumable_statement(
             target,
             current_block,
+            current_block
+                .next
+                .as_ref()
+                .and_then(|next| graph.block_pcs.get(next).copied())
+                .unwrap_or(graph.fallthrough_pcs[current_id]),
             variables,
             lists,
             arguments,
@@ -1058,7 +1064,10 @@ fn variable_write_for_slot(
 }
 
 fn is_straight_line_block(block: &ScratchBlock) -> bool {
-    !block.opcode.starts_with("control_") && block.opcode != "procedures_call"
+    !block.opcode.starts_with("control_")
+        && block.opcode != "procedures_call"
+        && block.opcode != "event_broadcast"
+        && block.opcode != "event_broadcastandwait"
 }
 
 fn generate_loop_boundary(
@@ -1228,6 +1237,7 @@ fn pc_literal(pc: usize) -> String {
 fn generate_resumable_statement(
     target: &ScratchTarget,
     block: &ScratchBlock,
+    next_pc: usize,
     variables: &HashMap<String, VariableInfo>,
     lists: &HashMap<String, ListInfo>,
     arguments: &HashMap<String, String>,
@@ -1235,6 +1245,31 @@ fn generate_resumable_statement(
     indent: usize,
 ) {
     match block.opcode.as_str() {
+        "event_broadcast" | "event_broadcastandwait" => {
+            let message = broadcast_message_expression(
+                target,
+                block.inputs.get("BROADCAST_INPUT"),
+                variables,
+                lists,
+                arguments,
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    pc_literal(next_pc)
+                ),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "return ScriptStatus::Broadcast {{ message: broadcast_message_key(scratch_string({message})), wait: {} }};",
+                    block.opcode == "event_broadcastandwait"
+                ),
+            );
+        }
         "data_addtolist" => {
             if let Some(list) = list_field(block, "LIST", lists) {
                 let input = block.inputs.get("ITEM");
@@ -1493,6 +1528,33 @@ fn generate_resumable_statement(
             ),
         ),
     }
+}
+
+fn broadcast_message_expression(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+) -> String {
+    if let Some(id) = input
+        .and_then(Value::as_array)
+        .and_then(|input| input.get(1))
+        .and_then(Value::as_array)
+        .and_then(|primitive| primitive.get(2))
+        .and_then(Value::as_str)
+        && let Some(message) = target.broadcasts.get(id)
+    {
+        return quote(message);
+    }
+    expression(
+        target,
+        input,
+        variables,
+        lists,
+        arguments,
+        &mut HashSet::new(),
+    )
 }
 
 fn procedure_for_call<'a>(

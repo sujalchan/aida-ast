@@ -35,6 +35,9 @@ pub struct ScratchTarget {
 
     #[serde(default)]
     pub lists: HashMap<String, ScratchList>,
+
+    #[serde(default)]
+    pub broadcasts: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,7 +208,22 @@ pub fn parse_input(input: &Value) -> Option<InputValue<'_>> {
 }
 
 pub fn parse_project(json_str: &str) -> Result<ScratchProject, serde_json::Error> {
-    serde_json::from_str(json_str)
+    let mut project: ScratchProject = serde_json::from_str(json_str)?;
+    let broadcasts = project
+        .targets
+        .iter()
+        .find(|target| target.is_stage)
+        .map(|stage| stage.broadcasts.clone())
+        .unwrap_or_default();
+    for target in &mut project.targets {
+        for (id, name) in &broadcasts {
+            target
+                .broadcasts
+                .entry(id.clone())
+                .or_insert_with(|| name.clone());
+        }
+    }
+    Ok(project)
 }
 
 // Print the targets found

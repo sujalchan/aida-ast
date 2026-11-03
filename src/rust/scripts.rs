@@ -15,6 +15,7 @@
 //! emits resumable custom block and green flag script frames.
 
 use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -46,8 +47,31 @@ pub(super) fn generate_green_flag_functions(
     let scripts = event_scripts(project);
     if scripts.is_empty() {
         output.push_str("enum GeneratedScript {}\n\nimpl ResumableScript for GeneratedScript {\n    fn step(&mut self, _state: &mut ScratchState, _clock: &dyn Clock) -> ScriptStatus { match *self {} }\n}\n\n");
+        output.push_str("fn new_broadcast_scripts(_message: usize, _state: &ScratchState) -> Vec<GeneratedScript> { Vec::new() }\n\n");
         return;
     }
+    let message_keys = broadcast_message_keys(&scripts);
+    let message_key_arms = message_keys
+        .iter()
+        .map(|(message, key)| {
+            format!(
+                "{} => {key}",
+                super::literals::quote(&message.to_uppercase())
+            )
+        })
+        .collect::<Vec<_>>();
+    let message_key_match = if message_key_arms.is_empty() {
+        "_ => 0".to_owned()
+    } else {
+        format!("{}, _ => 0", message_key_arms.join(", "))
+    };
+    line(
+        output,
+        0,
+        &format!(
+            "#[allow(dead_code)]\nfn broadcast_message_key(message: String) -> usize {{ match message.to_uppercase().as_str() {{ {message_key_match} }} }}\n"
+        ),
+    );
 
     output.push_str("#[allow(dead_code)]\nstruct ProcedureFrame { function: usize, pc: usize, repeat_counts: Vec<usize>, wait_deadlines: Vec<Option<u64>>, arguments: Vec<ScratchValue>, warp_mode: bool }\n");
     output
@@ -81,7 +105,36 @@ pub(super) fn generate_green_flag_functions(
             &format!("Self::{}(instance, _) => *instance,", script.variant),
         );
     }
-    output.push_str("    } }\n}\n\n");
+    output.push_str("    } }\n    fn broadcast_receiver(&self) -> Option<(usize, usize, usize)> { match self {\n");
+    for (index, script) in scripts.iter().enumerate() {
+        if let Some(message) = &script.broadcast_message {
+            let key = message_keys[message];
+            line(
+                output,
+                3,
+                &format!(
+                    "Self::{}(instance, _) => Some(({key}, {index}, *instance)),",
+                    script.variant
+                ),
+            );
+        }
+    }
+    output.push_str(
+        "        _ => None,\n    } }\n    fn restart_for_broadcast(&mut self) { match self {\n",
+    );
+    for script in &scripts {
+        if script.broadcast_message.is_some() {
+            line(
+                output,
+                3,
+                &format!(
+                    "Self::{}(instance, _) => {{ let instance = *instance; *self = new_{}_for(instance); }},",
+                    script.variant, script.function
+                ),
+            );
+        }
+    }
+    output.push_str("        _ => {},\n    } }\n}\n\n");
 
     for script in &scripts {
         let procedures = procedure_signatures(script.target);
@@ -117,7 +170,7 @@ pub(super) fn generate_green_flag_functions(
                     script.function, script.function, script.target_index
                 ),
             );
-        } else {
+        } else if script.hat.opcode == "control_start_as_clone" {
             line(
                 output,
                 0,
@@ -144,6 +197,36 @@ pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
         &format!(
             "fn new_scripts() -> Vec<GeneratedScript> {{ vec![{}] }}\n",
             values.join(", ")
+        ),
+    );
+    let mut receiver_groups = BTreeMap::<String, Vec<&GreenFlagScript<'_>>>::new();
+    for script in &scripts {
+        let Some(message) = &script.broadcast_message else {
+            continue;
+        };
+        receiver_groups
+            .entry(message.clone())
+            .or_default()
+            .push(script);
+    }
+    let message_keys = broadcast_message_keys(&scripts);
+    let receiver_arms = receiver_groups.into_iter().map(|(message, receivers)| {
+        let starters = receivers.into_iter().map(|script| format!(
+            "for instance in state.instances_for_target({}) {{ scripts.push(new_{}_for(instance)); }}",
+            script.target_index, script.function
+        )).collect::<Vec<_>>().join(" ");
+        format!("{} => {{ {} }}", message_keys[&message], starters)
+    }).collect::<Vec<_>>();
+    let receiver_match = if receiver_arms.is_empty() {
+        "_ => {}".to_owned()
+    } else {
+        format!("{}, _ => {{}}", receiver_arms.join(", "))
+    };
+    line(
+        output,
+        0,
+        &format!(
+            "#[allow(dead_code, unused_variables, unused_mut)]\nfn new_broadcast_scripts(message: usize, state: &ScratchState) -> Vec<GeneratedScript> {{ let mut scripts = Vec::new(); match message {{ {receiver_match} }} scripts }}\n",
         ),
     );
     let mut clone_targets = Vec::new();
@@ -211,6 +294,7 @@ struct GreenFlagScript<'a> {
     variant: String,
     function: String,
     target_index: usize,
+    broadcast_message: Option<String>,
 }
 
 fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
@@ -220,13 +304,13 @@ fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
         for (_, hat) in event_hats(target).into_iter().filter(|(_, hat)| {
             matches!(
                 hat.opcode.as_str(),
-                "event_whenflagclicked" | "control_start_as_clone"
+                "event_whenflagclicked" | "control_start_as_clone" | "event_whenbroadcastreceived"
             )
         }) {
-            let function_type = if hat.opcode == "event_whenflagclicked" {
-                "green_flag_script"
-            } else {
-                "clone_start_script"
+            let function_type = match hat.opcode.as_str() {
+                "event_whenflagclicked" => "green_flag_script",
+                "control_start_as_clone" => "clone_start_script",
+                _ => "broadcast_receiver_script",
             };
             let function = format!("{function_type}_{target_name}_{}", scripts.len() + 1);
             scripts.push(GreenFlagScript {
@@ -235,10 +319,39 @@ fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
                 variant: format!("Script{}", scripts.len() + 1),
                 function,
                 target_index,
+                broadcast_message: if hat.opcode == "event_whenbroadcastreceived" {
+                    broadcast_message(project, hat)
+                } else {
+                    None
+                },
             });
         }
     }
     scripts
+}
+
+fn broadcast_message_keys(scripts: &[GreenFlagScript<'_>]) -> BTreeMap<String, usize> {
+    scripts
+        .iter()
+        .filter_map(|script| script.broadcast_message.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .enumerate()
+        .map(|(index, message)| (message, index + 1))
+        .collect()
+}
+
+fn broadcast_message(
+    project: &ScratchProject,
+    hat: &crate::parser::ScratchBlock,
+) -> Option<String> {
+    let field = hat.fields.get("BROADCAST_OPTION")?.as_array()?;
+    let name = field.first()?.as_str()?;
+    let id = field.get(1).and_then(serde_json::Value::as_str);
+    let stage = project.targets.iter().find(|target| target.is_stage)?;
+    id.and_then(|id| stage.broadcasts.get(id))
+        .cloned()
+        .or_else(|| Some(name.to_owned()))
 }
 
 pub(super) fn procedure_signatures(target: &ScratchTarget) -> Vec<ProcedureSignature> {

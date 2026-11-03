@@ -184,6 +184,23 @@ fn block_expression(
         "data_lengthoflist" => list_field(block, "LIST", lists)
             .map(|list| format!("state.list({}).length() as f64", list.slot))
             .unwrap_or_else(|| unsupported_expression("missing list reference")),
+        "event_broadcast_menu" => block
+            .fields
+            .get("BROADCAST_OPTION")
+            .and_then(Value::as_array)
+            .and_then(|field| {
+                let name = field.first()?.as_str()?;
+                Some(
+                    field
+                        .get(1)
+                        .and_then(Value::as_str)
+                        .and_then(|id| target.broadcasts.get(id))
+                        .map(String::as_str)
+                        .unwrap_or(name),
+                )
+            })
+            .map(quote)
+            .unwrap_or_else(|| unsupported_expression("missing broadcast message")),
         "data_itemnumoflist" => list_field(block, "LIST", lists)
             .map(|list| {
                 format!(
@@ -413,14 +430,24 @@ fn local_block_expression(
     let input = |name: &str, active: &mut HashSet<String>| {
         local_expression(target, block.inputs.get(name), variables, locals, active)
     };
-    let numeric_binary = |function: &str, left: &str, right: &str, active: &mut HashSet<String>| {
-        let left = input(left, active)?;
-        let right = input(right, active)?;
-        Some(LocalExpression {
-            code: format!("{function}({}, {})", left.code, right.code),
-            kind: LocalValueKind::Number,
-        })
-    };
+    let numeric_binary =
+        |function: &str, operator: &str, left: &str, right: &str, active: &mut HashSet<String>| {
+            let left = input(left, active)?;
+            let right = input(right, active)?;
+            let native =
+                left.kind == LocalValueKind::Number && right.kind == LocalValueKind::Number;
+            let code = if native {
+                let left = format!("scratch_number_operand({})", left.code);
+                let right = format!("scratch_number_operand({})", right.code);
+                format!("({left} {operator} {right})")
+            } else {
+                format!("{function}({}, {})", left.code, right.code)
+            };
+            Some(LocalExpression {
+                code,
+                kind: LocalValueKind::Number,
+            })
+        };
     let comparison = |function: &str,
                       operator: &str,
                       left_name: &str,
@@ -453,11 +480,18 @@ fn local_block_expression(
     };
 
     match block.opcode.as_str() {
-        "operator_add" => numeric_binary("scratch_add", "NUM1", "NUM2", active),
-        "operator_subtract" => numeric_binary("scratch_subtract", "NUM1", "NUM2", active),
-        "operator_multiply" => numeric_binary("scratch_multiply", "NUM1", "NUM2", active),
-        "operator_divide" => numeric_binary("scratch_divide", "NUM1", "NUM2", active),
-        "operator_mod" => numeric_binary("scratch_mod", "NUM1", "NUM2", active),
+        "operator_add" => numeric_binary("scratch_add", "+", "NUM1", "NUM2", active),
+        "operator_subtract" => numeric_binary("scratch_subtract", "-", "NUM1", "NUM2", active),
+        "operator_multiply" => numeric_binary("scratch_multiply", "*", "NUM1", "NUM2", active),
+        "operator_divide" => numeric_binary("scratch_divide", "/", "NUM1", "NUM2", active),
+        "operator_mod" => {
+            let left = input("NUM1", active)?;
+            let right = input("NUM2", active)?;
+            Some(LocalExpression {
+                code: format!("scratch_mod({}, {})", left.code, right.code),
+                kind: LocalValueKind::Number,
+            })
+        }
         "operator_equals" if identical_literal_inputs(block) => Some(LocalExpression {
             code: "true".to_owned(),
             kind: LocalValueKind::Boolean,
@@ -488,7 +522,11 @@ fn local_block_expression(
         }),
         "operator_mathop" => {
             let value = input("NUM", active)?;
-            let numeric = format!("scratch_to_number({})", value.code);
+            let numeric = if value.kind == LocalValueKind::Number {
+                format!("scratch_number_operand({})", value.code)
+            } else {
+                format!("scratch_to_number({})", value.code)
+            };
             let operator = field_value(block, "OPERATOR")?.as_str()?;
             let code = match operator {
                 "sin" => format!("scratch_sin({})", value.code),

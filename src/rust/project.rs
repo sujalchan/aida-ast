@@ -63,6 +63,14 @@ pub(super) struct ListInfo {
 pub fn generate(project: &ScratchProject) -> String {
     let variables = allocate_variables(project);
     let lists = allocate_lists(project);
+    let uses_broadcasts = project.targets.iter().any(|target| {
+        target.blocks.values().any(|block| {
+            matches!(
+                block.opcode.as_str(),
+                "event_broadcast" | "event_broadcastandwait" | "event_whenbroadcastreceived"
+            )
+        })
+    });
     let mut output = String::new();
 
     generate_green_flag_functions(project, &variables, &lists, &mut output);
@@ -157,11 +165,18 @@ pub fn generate(project: &ScratchProject) -> String {
     output.push_str(
         "    pub fn step(&mut self) -> bool { self.advance() == SchedulerStatus::Progressed }\n",
     );
-    output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state); let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } } status }\n");
+    if uses_broadcasts {
+        output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state); if let Some((sender, message, wait)) = self.scheduler.take_broadcast() { let receivers = new_broadcast_scripts(message, &self.state); self.scheduler.broadcast(sender, receivers, wait); } let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } } status }\n");
+    } else {
+        output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state); let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } } status }\n");
+    }
     output.push_str("    pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }\n");
     output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }\n");
     output.push_str(
         "    pub fn is_complete(&self) -> bool { self.scheduler.active_scripts() == 0 }\n",
+    );
+    output.push_str(
+        "    pub fn active_script_count(&self) -> usize { self.scheduler.active_scripts() }\n",
     );
     output.push_str("    pub fn state(&self) -> &ScratchState { &self.state }\n");
     output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }\n}\n\n");
@@ -196,10 +211,12 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         "scratch_mod",
         "scratch_multiply",
         "scratch_not",
+        "scratch_number_operand",
         "scratch_or",
         "scratch_random",
         "scratch_round",
         "scratch_sin",
+        "scratch_string",
         "scratch_subtract",
         "scratch_tan",
         "scratch_to_number",
