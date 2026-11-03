@@ -101,10 +101,43 @@ mod tests {
         );
         assert!(output.contains("state.change_x_by(scratch_to_number(1.0_f64));"));
         assert!(output.contains("state.request_redraw();"));
-        assert!(output.contains("self.scheduler.script_ids_in_frame_order()"));
+        assert!(output.contains("self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order)"));
         assert!(output.contains("self.scheduler.advance_script_id(id, &mut self.state)"));
+        assert!(output.contains("self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id)"));
         assert!(!output.contains("unsupported statement: motion_gotoxy"));
         assert!(!output.contains("unsupported statement: motion_changexby"));
+    }
+
+    #[test]
+    fn go_to_fixture_lowers_random_moves_and_resumable_glides() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/go-to-tests.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("scratch_random(-240.5_f64, 240.5_f64)"));
+        assert!(output.contains("scratch_random(-179.5_f64, 180.5_f64)"));
+        assert!(output.contains("state.change_x_by(scratch_to_number(1.0_f64));"));
+        assert!(output.contains("state.change_y_by(scratch_to_number(1.0_f64));"));
+        assert!(output.contains("GlideState::new(clock.now_millis()"));
+        assert!(output.contains("motion_glide.position_at(clock.now_millis())"));
+        assert!(output.contains("return ScriptStatus::Yield;"));
+        assert!(output.contains("state.request_redraw();"));
+        assert!(output.contains("state.change_local_by(1, scratch_change);"));
+        let first_glide = output.find("GlideState::new(clock.now_millis()").unwrap();
+        let second_glide = output[first_glide + 1..]
+            .find("GlideState::new(clock.now_millis()")
+            .map(|offset| first_glide + 1 + offset)
+            .unwrap();
+        assert!(first_glide < second_glide);
+        for opcode in [
+            "motion_goto",
+            "motion_changeyby",
+            "motion_glideto",
+            "motion_glidesecstoxy",
+        ] {
+            assert!(!output.contains(&format!("unsupported statement: {opcode}")));
+        }
     }
 
     #[test]

@@ -536,6 +536,16 @@ fn generate_resumable_block(
                 "return ScriptStatus::WaitUntil(wait_deadline);",
             );
         }
+        "motion_glideto" | "motion_glidesecstoxy" => generate_resumable_statement(
+            target,
+            block,
+            next_pc,
+            variables,
+            lists,
+            arguments,
+            output,
+            indent + 1,
+        ),
         "procedures_call" => generate_resumable_procedure_call(
             target,
             block,
@@ -1051,6 +1061,10 @@ fn variable_write_for_slot(
 
 fn is_straight_line_block(block: &ScratchBlock) -> bool {
     !block.opcode.starts_with("control_")
+        && !matches!(
+            block.opcode.as_str(),
+            "motion_glideto" | "motion_glidesecstoxy"
+        )
         && block.opcode != "procedures_call"
         && block.opcode != "event_broadcast"
         && block.opcode != "event_broadcastandwait"
@@ -1185,7 +1199,7 @@ fn generate_resumable_procedure_call(
         output,
         indent,
         &format!(
-            "script.frames.push(ProcedureFrame {{ function: {}, pc: {}, repeat_counts: vec![0; {}], arguments: vec![{}], warp_mode: inherited_warp || {} }});",
+            "script.frames.push(ProcedureFrame::new({}, {}, vec![0; {}], vec![{}], inherited_warp || {}));",
             entry.function_id,
             pc_literal(entry.start_pc),
             entry.repeat_count,
@@ -1446,15 +1460,15 @@ fn generate_resumable_statement(
                     line(
                         output,
                         indent,
-                        &format!(
-                            "let scratch_new_value: ScratchValue = scratch_add({}, {value}).into();",
-                            variable.read_expression()
-                        ),
+                        &format!("let scratch_change = scratch_to_number({value});"),
                     );
                     line(
                         output,
                         indent,
-                        &variable.write_statement("scratch_new_value"),
+                        &format!(
+                            "state.change_local_by({}, scratch_change);",
+                            variable.slot
+                        ),
                     );
                 }
             } else {
@@ -1503,6 +1517,20 @@ fn generate_resumable_statement(
             );
             line(output, indent, "state.request_redraw();");
         }
+        "motion_goto" => {
+            if let Some(position) = motion_target_position_expression(target, block, "TO") {
+                line(
+                    output,
+                    indent,
+                    &format!("if let Some((motion_x, motion_y)) = {position} {{"),
+                );
+                line(output, indent + 1, "state.set_xy(motion_x, motion_y);");
+                line(output, indent + 1, "state.request_redraw();");
+                line(output, indent, "}");
+            } else {
+                line(output, indent, "todo!(\"missing motion target\");");
+            }
+        }
         "motion_changexby" => {
             let dx = expression(
                 target,
@@ -1519,6 +1547,25 @@ fn generate_resumable_statement(
             );
             line(output, indent, "state.request_redraw();");
         }
+        "motion_changeyby" => {
+            let dy = expression(
+                target,
+                block.inputs.get("DY"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent,
+                &format!("state.change_y_by(scratch_to_number({dy}));"),
+            );
+            line(output, indent, "state.request_redraw();");
+        }
+        "motion_glideto" | "motion_glidesecstoxy" => generate_glide_statement(
+            target, block, next_pc, variables, lists, arguments, output, indent,
+        ),
         "control_create_clone_of" => {
             let option = block
                 .inputs
@@ -1618,6 +1665,172 @@ fn broadcast_message_expression(
         arguments,
         &mut HashSet::new(),
     )
+}
+
+fn motion_target_position_expression(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    input_name: &str,
+) -> Option<String> {
+    let option = block
+        .inputs
+        .get(input_name)
+        .and_then(parse_input)
+        .and_then(|input| match input {
+            InputValue::BlockReference(id) => target
+                .blocks
+                .get(id)
+                .and_then(|menu| field_value(menu, "TO"))
+                .and_then(Value::as_str),
+            InputValue::String(value) | InputValue::Number(value) => value.as_str(),
+            _ => None,
+        })?;
+
+    Some(match option {
+        "_random_" => "Some((scratch_round(scratch_random(-240.5_f64, 240.5_f64)), scratch_round(scratch_random(-179.5_f64, 180.5_f64))))".to_owned(),
+        "_mouse_" => "Some((state.mouse_x(), state.mouse_y()))".to_owned(),
+        name => format!(
+            "state.clone_target_for_name({}).and_then(|target| state.original_instance(target)).and_then(|instance| state.position(instance))",
+            quote(name)
+        ),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_glide_statement(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    next_pc: usize,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    output: &mut String,
+    indent: usize,
+) {
+    let seconds = expression(
+        target,
+        block.inputs.get("SECS"),
+        variables,
+        lists,
+        arguments,
+        &mut HashSet::new(),
+    );
+    line(
+        output,
+        indent,
+        "if script.frames.last().unwrap().glide.is_none() {",
+    );
+
+    if block.opcode == "motion_glideto" {
+        if let Some(position) = motion_target_position_expression(target, block, "TO") {
+            line(
+                output,
+                indent + 1,
+                &format!("if let Some((motion_end_x, motion_end_y)) = {position} {{"),
+            );
+            line(
+                output,
+                indent + 2,
+                "let motion_start = state.position(state.current_instance()).unwrap_or((0.0, 0.0));",
+            );
+            line(
+                output,
+                indent + 2,
+                &format!(
+                    "script.frames.last_mut().unwrap().glide = Some(GlideState::new(clock.now_millis(), scratch_to_number({seconds}), motion_start, (motion_end_x, motion_end_y)));"
+                ),
+            );
+            line(output, indent + 1, "} else {");
+            line(
+                output,
+                indent + 2,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    pc_literal(next_pc)
+                ),
+            );
+            line(output, indent + 2, "continue;");
+            line(output, indent + 1, "}");
+        } else {
+            line(output, indent + 1, "todo!(\"missing glide target\");");
+        }
+    } else {
+        let x = expression(
+            target,
+            block.inputs.get("X"),
+            variables,
+            lists,
+            arguments,
+            &mut HashSet::new(),
+        );
+        let y = expression(
+            target,
+            block.inputs.get("Y"),
+            variables,
+            lists,
+            arguments,
+            &mut HashSet::new(),
+        );
+        line(
+            output,
+            indent + 1,
+            "let motion_start = state.position(state.current_instance()).unwrap_or((0.0, 0.0));",
+        );
+        line(
+            output,
+            indent + 1,
+            &format!("let motion_destination = (scratch_to_number({x}), scratch_to_number({y}));"),
+        );
+        line(
+            output,
+            indent + 1,
+            &format!(
+                "script.frames.last_mut().unwrap().glide = Some(GlideState::new(clock.now_millis(), scratch_to_number({seconds}), motion_start, motion_destination));"
+            ),
+        );
+    }
+    line(output, indent, "}");
+    line(
+        output,
+        indent,
+        "let motion_glide = script.frames.last().unwrap().glide.unwrap();",
+    );
+    line(
+        output,
+        indent,
+        "if let Some((motion_x, motion_y)) = motion_glide.position_at(clock.now_millis()) {",
+    );
+    line(output, indent + 1, "state.set_xy(motion_x, motion_y);");
+    line(output, indent + 1, "state.request_redraw();");
+    line(
+        output,
+        indent + 1,
+        "if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }",
+    );
+    line(output, indent + 1, "continue;");
+    line(output, indent, "} else {");
+    line(
+        output,
+        indent + 1,
+        "let (motion_x, motion_y) = motion_glide.destination();",
+    );
+    line(output, indent + 1, "state.set_xy(motion_x, motion_y);");
+    line(output, indent + 1, "state.request_redraw();");
+    line(
+        output,
+        indent + 1,
+        "script.frames.last_mut().unwrap().glide = None;",
+    );
+    line(
+        output,
+        indent + 1,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = {};",
+            pc_literal(next_pc)
+        ),
+    );
+    line(output, indent + 1, "continue;");
+    line(output, indent, "}");
 }
 
 fn procedure_for_call<'a>(

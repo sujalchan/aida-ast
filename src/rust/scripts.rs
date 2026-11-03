@@ -51,6 +51,14 @@ pub(super) fn generate_green_flag_functions(
         output.push_str("fn new_broadcast_scripts(_message: usize, _state: &ScratchState) -> Vec<GeneratedScript> { Vec::new() }\n\n");
         return;
     }
+    let uses_glide = project.targets.iter().any(|target| {
+        target.blocks.values().any(|block| {
+            matches!(
+                block.opcode.as_str(),
+                "motion_glideto" | "motion_glidesecstoxy"
+            )
+        })
+    });
     let message_keys = broadcast_message_keys(&scripts);
     let message_key_arms = message_keys
         .iter()
@@ -74,7 +82,15 @@ pub(super) fn generate_green_flag_functions(
         ),
     );
 
-    output.push_str("#[allow(dead_code)]\nstruct ProcedureFrame { function: usize, pc: usize, repeat_counts: Vec<usize>, arguments: Vec<ScratchValue>, warp_mode: bool }\n");
+    let glide_field = if uses_glide {
+        ", glide: Option<GlideState>"
+    } else {
+        ""
+    };
+    let glide_initializer = if uses_glide { ", glide: None" } else { "" };
+    output.push_str(&format!(
+        "#[allow(dead_code)]\nstruct ProcedureFrame {{ function: usize, pc: usize, repeat_counts: Vec<usize>, arguments: Vec<ScratchValue>, warp_mode: bool{glide_field} }}\nimpl ProcedureFrame {{ fn new(function: usize, pc: usize, repeat_counts: Vec<usize>, arguments: Vec<ScratchValue>, warp_mode: bool) -> Self {{ Self {{ function, pc, repeat_counts, arguments, warp_mode{glide_initializer} }} }} }}\n"
+    ));
     output
         .push_str("struct ScriptState { frames: Vec<ProcedureFrame>, __WARP_BUDGET_FIELD__ }\n\n");
     line(output, 0, "enum GeneratedScript {");
@@ -153,7 +169,7 @@ pub(super) fn generate_green_flag_functions(
             output,
             0,
             &format!(
-                "fn new_{}_for(instance: usize) -> GeneratedScript {{ GeneratedScript::{}(instance, ScriptState {{ frames: vec![ProcedureFrame {{ function: 0, pc: {}, repeat_counts: vec![0; {loop_count}], arguments: vec![], warp_mode: false }}], __WARP_BUDGET_INIT__ }}) }}\n",
+                "fn new_{}_for(instance: usize) -> GeneratedScript {{ GeneratedScript::{}(instance, ScriptState {{ frames: vec![ProcedureFrame::new(0, {}, vec![0; {loop_count}], vec![], false)], __WARP_BUDGET_INIT__ }}) }}\n",
                 script.function,
                 script.variant,
                 if start_pc == usize::MAX {

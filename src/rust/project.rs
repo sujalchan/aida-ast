@@ -88,7 +88,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     generate_green_flag_functions(project, &variables, &lists, fast_math, &mut output);
     generate_scripts(project, &mut output);
 
-    output.push_str("#[allow(dead_code)]\npub struct GeneratedProgram { state: ScratchState, scheduler: ScriptScheduler<GeneratedScript> }\n\n#[allow(dead_code)]\nimpl GeneratedProgram {\n    pub fn new() -> Self { Self::build(None) }\n    pub fn new_with_clock(clock: Box<dyn Clock>) -> Self { Self::build(Some(clock)) }\n    fn build(clock: Option<Box<dyn Clock>>) -> Self {\n");
+    output.push_str("#[allow(dead_code)]\npub struct GeneratedProgram { state: ScratchState, scheduler: ScriptScheduler<GeneratedScript>, frame_order: Vec<u64> }\n\n#[allow(dead_code)]\nimpl GeneratedProgram {\n    pub fn new() -> Self { Self::build(None) }\n    pub fn new_with_clock(clock: Box<dyn Clock>) -> Self { Self::build(Some(clock)) }\n    fn build(clock: Option<Box<dyn Clock>>) -> Self {\n");
 
     let mut initial_values = vec![String::new(); variables.len()];
     let mut variable_metadata = vec![String::new(); variables.len()];
@@ -181,7 +181,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     }
 
     output.push_str("let scripts = new_scripts();\nlet scheduler = match clock { Some(clock) => ScriptScheduler::with_clock(scripts, clock), None => ScriptScheduler::new(scripts) };\n");
-    output.push_str("    Self { state, scheduler }\n    }\n\n");
+    output.push_str("    Self { state, scheduler, frame_order: Vec::new() }\n    }\n\n");
     output.push_str(
         "    pub fn step(&mut self) -> bool { self.advance() == SchedulerStatus::Progressed }\n",
     );
@@ -194,7 +194,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         output.push_str(" let deleted = self.state.current_instance(); if !self.state.instance_is_alive(deleted) { self.scheduler.remove_target_scripts(deleted); } for instance in self.state.take_pending_clones() { if let Some(target) = self.state.instance_target(instance) { self.scheduler.add_scripts(new_clone_scripts(target, instance)); } }");
     }
     output.push_str(" }\n");
-    output.push_str("    pub fn advance_frame(&mut self) -> SchedulerStatus { let mut script_ids = self.scheduler.script_ids_in_frame_order(); let mut cursor = 0; let mut progressed = false; while cursor < script_ids.len() { let id = script_ids[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) { if status == SchedulerStatus::Complete { return status; } progressed = true; self.process_after_step(); for id in self.scheduler.script_ids_in_frame_order() { if !script_ids.contains(&id) { script_ids.push(id); } } } } if progressed { SchedulerStatus::Progressed } else { self.scheduler.idle_status() } }\n");
+    output.push_str("    pub fn advance_frame(&mut self) -> SchedulerStatus { self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut next_new_id = self.scheduler.next_script_id(); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() { let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) { if status == SchedulerStatus::Complete { return status; } progressed = true; self.process_after_step(); if self.scheduler.next_script_id() != next_new_id { self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id); next_new_id = self.scheduler.next_script_id(); } } } if progressed { SchedulerStatus::Progressed } else { self.scheduler.idle_status() } }\n");
     output.push_str("    pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }\n");
     output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }\n");
     output.push_str(
@@ -261,6 +261,7 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         "scratch_tan",
         "scratch_to_number",
         "Clock",
+        "GlideState",
         "ObservableEvent",
         "ResumableScript",
         "ScratchList",
