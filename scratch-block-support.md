@@ -7,16 +7,18 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 ## Status key
 
 - **✓**: AIDA generates Scratch-specific AIDA text, or the Rust backend implements the block's runtime behavior.
-- **-**: AIDA renders the block, but it is structural/menu data, only works as a parent block input, or has no event source in the current runtime. This includes procedure definition blocks, menu shadows, click hats, and greater-than sensor hats.
+- **-**: AIDA renders the block, but it is structural/menu data, only works as a parent block input, or is only supported through a project monitor. This includes procedure definition blocks, menu shadows, click hats, greater-than sensor hats, and motion/size reporters currently exposed as monitors rather than script inputs.
 - **x**: the Rust runtime backend has no implementation; generated code reaches an unsupported-block placeholder if the block executes.
 
 `AIDA text output` is a translation format, not an execution engine. A check in that column means the block has a text representation; it does not imply Scratch VM-equivalent runtime behavior. Runtime status is based on the generated Rust implementation in [`src/rust/expressions.rs`](src/rust/expressions.rs), [`src/rust/statements.rs`](src/rust/statements.rs), and [`src/rust/scripts.rs`](src/rust/scripts.rs). These marks describe implemented code paths, not a guarantee of parity for every Scratch edge case.
 
 Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `event_whenbroadcastreceived`. The scheduler starts matching receivers, restarts an already active receiver when the same message is sent again, and waits for the started receiver runs for broadcast-and-wait. Matching receivers are created for live clones too; deleting a clone removes its scripts and releases senders waiting for them. The `broadcast-test.sb3` fixture exercises these paths, including a receiver that calls a waiting custom block. Keyboard hats and key/mouse reporters work in graphical mode. Backdrop-switch hats run when a different backdrop is selected. Click hats and greater-than sensor hats remain partial because AIDA does not yet generate those event sources.
 
+Project monitors preserve their target ownership and reporter parameters when AIDA builds the renderer's value keys. Sprite-owned reporters are labeled with their owning sprite name; Stage backdrop number/name monitors read the selected Stage backdrop. Motion x/y/direction and Looks size monitors use the matching original sprite's runtime snapshot, so motion changes (including glide updates) refresh the displayed value. The renderer only marks a monitor dirty when its displayed value changes. This monitor support does not imply that the reporter opcode is available as a script input. Generic reporter monitors without a runtime-published value still show their project-provided initial value.
+
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **180 block cases + 4 procedure opcodes** | **78 implemented ✓, 27 partial -, 79 not implemented x** |
+| **Catalog** | **180 block cases + 4 procedure opcodes** | **82 implemented ✓, 31 partial -, 71 not implemented x** |
 
 ### Control
 
@@ -106,7 +108,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `looks_setsizeto` | ✓ | x |
 | `looks_setstretchto` | ✓ | x |
 | `looks_show` | ✓ | x |
-| `looks_size` | ✓ | x |
+| `looks_size` | ✓ | - |
 | `looks_switchbackdropto` | ✓ | ✓ |
 | `looks_switchbackdroptoandwait` | ✓ | x |
 | `looks_switchcostumeto` | ✓ | x |
@@ -120,7 +122,7 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `motion_align_scene` | ✓ | x |
 | `motion_changexby` | ✓ | ✓ |
 | `motion_changeyby` | ✓ | ✓ |
-| `motion_direction` | ✓ | x |
+| `motion_direction` | ✓ | - |
 | `motion_glidesecstoxy` | ✓ | ✓ |
 | `motion_glideto` | ✓ | ✓ |
 | `motion_glideto_menu` | ✓ | - |
@@ -129,19 +131,19 @@ Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `eve
 | `motion_gotoxy` | ✓ | ✓ |
 | `motion_ifonedgebounce` | ✓ | x |
 | `motion_movesteps` | ✓ | x |
-| `motion_pointindirection` | ✓ | x |
-| `motion_pointtowards` | ✓ | x |
+| `motion_pointindirection` | ✓ | ✓ |
+| `motion_pointtowards` | ✓ | ✓ |
 | `motion_pointtowards_menu` | ✓ | - |
 | `motion_scroll_right` | ✓ | x |
 | `motion_scroll_up` | ✓ | x |
 | `motion_setrotationstyle` | ✓ | x |
-| `motion_setx` | ✓ | x |
-| `motion_sety` | ✓ | x |
+| `motion_setx` | ✓ | ✓ |
+| `motion_sety` | ✓ | ✓ |
 | `motion_turnleft` | ✓ | x |
 | `motion_turnright` | ✓ | x |
-| `motion_xposition` | ✓ | x |
+| `motion_xposition` | ✓ | - |
 | `motion_xscroll` | ✓ | x |
-| `motion_yposition` | ✓ | x |
+| `motion_yposition` | ✓ | - |
 | `motion_yscroll` | ✓ | x |
 
 ### Operators
@@ -263,6 +265,8 @@ headless runtime draws or changes pen state.
 
 ## Reading this checklist
 
-The Rust runtime can run headless or with the graphical renderer. `looks_say` writes its value to the console and displays a speech bubble in graphical mode; think bubbles work the same way without console output. Implemented motion updates sprite and clone positions and renders them, and implemented backdrop switching updates the stage. Variable/list data, clone state, broadcasts, waits, and supported event hats are integrated with the scheduler. Other visual effects, costume changes, sound, pen blocks, and unsupported sensing remain unsimulated. Some menu blocks and procedure definition blocks are structural data used by their parent or call block rather than runnable commands.
+The Rust runtime can run headless or with the graphical renderer. `looks_say` writes its value to the console and displays a speech bubble in graphical mode; think bubbles work the same way without console output. Motion updates sprite and clone state, and backdrop switching updates the Stage. Variable/list data, clone state, broadcasts, waits, and supported event hats are integrated with the scheduler. The renderer has a separate drawable path for clones, but clone visibility in `motion-point-test.sb3` remains a reported graphical issue and is not marked as verified here. Other visual effects, costume changes, sound, pen blocks, and unsupported sensing remain unsimulated. Some menu blocks and procedure definition blocks are structural data used by their parent or call block rather than runnable commands.
 
 The counts and marks are a manually reviewed snapshot. Update this file when the Rust block generator or runtime gains or loses support.
+
+Motion position updates include `motion_setx` and `motion_sety`; position updates use SVG or bitmap costume bounds for Scratch-style fencing. Motion reporter monitors retain their `spriteName` owner and display that sprite's x, y, or direction state. `motion_pointtowards` handles random direction, mouse, and named sprite targets. Clone script state and transforms are independent in runtime snapshots; graphical clone visibility still needs verification in the reported fixture.
