@@ -165,9 +165,28 @@ pub(super) fn generate_green_flag_functions(
             );
         }
     }
-    output.push_str(
-        "        _ => None,\n    } }\n    fn restart_for_broadcast(&mut self) { match self {\n",
-    );
+    // key hat identity includes both its compiled block index and target instance.
+    output.push_str("        _ => None,\n    } }\n    fn key_hat_key(&self) -> Option<(usize, usize)> { match self {\n");
+    for (index, script) in scripts.iter().enumerate() {
+        if script.hat.opcode == "event_whenkeypressed" {
+            line(
+                output,
+                3,
+                &format!(
+                    "Self::{}(instance, _) => Some(({index}, *instance)),",
+                    script.variant
+                ),
+            );
+        }
+    }
+    // omit a wildcard when every generated variant is a key hat to keep rust's match exhaustive.
+    if scripts
+        .iter()
+        .any(|script| script.hat.opcode != "event_whenkeypressed")
+    {
+        output.push_str("        _ => None,\n");
+    }
+    output.push_str("    } }\n    fn restart_for_broadcast(&mut self) { match self {\n");
     for script in &scripts {
         if script.broadcast_message.is_some() {
             line(
@@ -336,7 +355,7 @@ pub(super) fn generate_scripts(
             .and_then(|field| field.first())
             .and_then(Value::as_str)
             .unwrap_or("")
-            .to_ascii_lowercase();
+            .to_lowercase();
         key_groups.entry(key).or_default().push(script);
     }
     let any_key_scripts = key_groups.remove("any").unwrap_or_default();

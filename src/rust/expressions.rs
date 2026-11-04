@@ -152,25 +152,7 @@ fn block_expression(
                 target, block, "OPERAND", variables, lists, arguments, active
             )
         ),
-        "operator_random" => format!(
-            "scratch_random({}, {})",
-            random_argument(
-                target,
-                block.inputs.get("FROM"),
-                variables,
-                lists,
-                arguments,
-                active,
-            ),
-            random_argument(
-                target,
-                block.inputs.get("TO"),
-                variables,
-                lists,
-                arguments,
-                active,
-            )
-        ),
+        "operator_random" => random_expression(target, block, variables, lists, arguments, active),
         "operator_mathop" => math_expression(target, block, variables, lists, arguments, active),
         "data_variable" => variable_field(block, "VARIABLE", variables)
             .map(|variable| variable.read_expression())
@@ -249,14 +231,22 @@ fn block_expression(
                 )
             })
             .unwrap_or_else(|| unsupported_expression("missing list reference")),
+        // evaluate the current connected reporter, falling back to legacy field data only when absent.
         "sensing_keypressed" => block
-            .fields
+            .inputs
             .get("KEY_OPTION")
-            .and_then(Value::as_array)
-            .and_then(|field| field.first())
+            .map(|_| format!("state.key_pressed({})", input("KEY_OPTION", active)))
+            .or_else(|| {
+                field_value(block, "KEY_OPTION")
+                    .and_then(Value::as_str)
+                    .map(|key| format!("state.key_pressed({})", quote(key)))
+            })
+            .unwrap_or_else(|| "state.key_pressed(\"\")".to_owned()),
+        // preserve the selected serialized dropdown value for reporter and hat inputs.
+        "sensing_keyoptions" => field_value(block, "KEY_OPTION")
             .and_then(Value::as_str)
-            .map(|key| format!("state.key_pressed({})", quote(key)))
-            .unwrap_or_else(|| unsupported_expression("missing key option")),
+            .map(quote)
+            .unwrap_or_else(|| quote("space")),
         "sensing_mousedown" => "state.mouse_down()".to_owned(),
         "sensing_mousex" => "state.mouse_x()".to_owned(),
         "sensing_mousey" => "state.mouse_y()".to_owned(),
@@ -902,6 +892,81 @@ fn numeric_literal(target: &ScratchTarget, input: Option<&Value>) -> Option<Stri
 }
 
 // preserve numeric spelling for random inputs because scratch distinguishes 10 from 10.0.
+// lower fixed random bounds once while preserving scratch's integer-range decision.
+fn random_expression(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    active: &mut HashSet<String>,
+) -> String {
+    let from = constant_random_bound(target, block.inputs.get("FROM"));
+    let to = constant_random_bound(target, block.inputs.get("TO"));
+    if let (Some((from, from_integer)), Some((to, to_integer))) = (from, to) {
+        return format!(
+            "scratch_random_constant({from:?}_f64, {to:?}_f64, {})",
+            from_integer && to_integer
+        );
+    }
+    format!(
+        "scratch_random({}, {})",
+        random_argument(
+            target,
+            block.inputs.get("FROM"),
+            variables,
+            lists,
+            arguments,
+            active,
+        ),
+        random_argument(
+            target,
+            block.inputs.get("TO"),
+            variables,
+            lists,
+            arguments,
+            active,
+        )
+    )
+}
+
+fn constant_random_bound(target: &ScratchTarget, input: Option<&Value>) -> Option<(f64, bool)> {
+    let spelling = match input.and_then(parse_input)? {
+        InputValue::Number(value) => random_literal_spelling(&value)?,
+        InputValue::BlockReference(id) => {
+            let block = target.blocks.get(id)?;
+            let field = match block.opcode.as_str() {
+                "math_number"
+                | "math_integer"
+                | "math_whole_number"
+                | "math_positive_number"
+                | "math_angle" => "NUM",
+                "text" => "TEXT",
+                _ => return None,
+            };
+            random_literal_spelling(field_value(block, field)?)?
+        }
+        _ => return None,
+    };
+    let text = spelling.trim();
+    let number = if text.is_empty() {
+        0.0
+    } else {
+        text.parse::<f64>().unwrap_or(0.0)
+    };
+    let number = if number.is_nan() { 0.0 } else { number };
+    number
+        .is_finite()
+        .then_some((number, !spelling.contains('.')))
+}
+
+fn random_literal_spelling(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| value.as_number().map(|number| number.to_string()))
+}
+
 fn random_argument(
     target: &ScratchTarget,
     input: Option<&Value>,

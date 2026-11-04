@@ -303,7 +303,29 @@ mod tests {
         assert!(output.contains("let scratch_list_index: ScratchValue = (\"random\").into();"));
         assert!(output.contains("let scratch_list_index: ScratchValue = (\"last\").into();"));
         assert!(output.contains("state.list(0).get(\"last\")"));
+        assert!(
+            output.contains(
+                "let scratch_list_changed = state.list_mut(0).delete(scratch_list_index);"
+            )
+        );
+        assert!(output.contains("state.list_changed_result(0, scratch_list_changed);"));
+        assert!(!output.contains("list_before_change"));
         assert!(!output.contains("unsupported reporter: data_listindex"));
+    }
+
+    // verify simple warp list fills use a bounded generated batch path and retain resumable state.
+    #[test]
+    fn list_smoke_warp_append_loop_is_fused_with_watchdog_chunks() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/list-smoke-test.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("add_generated(repeat_chunk"));
+        assert!(output.contains("scratch_random_constant(11.0_f64, 20.0_f64, true)"));
+        assert!(output.contains("script.warp_budget.expired_now(clock)"));
+        assert!(output.contains("repeat_counts[0] = repeat_remaining"));
+        assert!(!output.contains("list_before_change"));
     }
 
     #[test]
@@ -642,7 +664,90 @@ mod tests {
         let output = generate(&project);
         assert!(output.contains("fn new_keypress_scripts(key: &str, state: &ScratchState)"));
         assert!(output.contains("\"space\" => { for instance in state.instances_for_target(0)"));
-        assert!(output.contains("self.scheduler.add_scripts(scripts)"));
+        assert!(output.contains("self.scheduler.start_key_hats(scripts)"));
+    }
+
+    // check that the special any selector is emitted before key-specific hats.
+    #[test]
+    fn any_key_hat_is_started_for_each_recognized_key_event() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name":"Stage", "isStage":true, "variables":{}, "blocks":{}
+                }, {
+                    "name":"Sprite1", "isStage":false, "variables":{},
+                    "blocks": {
+                        "any_hat": {"opcode":"event_whenkeypressed", "next":"any_say", "topLevel":true, "inputs":{}, "fields":{"KEY_OPTION":["any",null]}},
+                        "any_say": {"opcode":"looks_say", "next":null, "parent":"any_hat", "inputs":{"MESSAGE":[1,[10,"any"]]}, "fields":{}},
+                        "letter_hat": {"opcode":"event_whenkeypressed", "next":"letter_say", "topLevel":true, "inputs":{}, "fields":{"KEY_OPTION":["a",null]}},
+                        "letter_say": {"opcode":"looks_say", "next":null, "parent":"letter_hat", "inputs":{"MESSAGE":[1,[10,"letter"]]}, "fields":{}}
+                    }
+                }]
+            }).to_string(),
+        ).unwrap();
+        let output = generate(&project);
+        let start = output.find("fn new_keypress_scripts").unwrap();
+        let body = &output[start..];
+        let match_at = body.find("match key").unwrap();
+        assert!(body[..match_at].contains("state.instances_for_target(1)"));
+        assert!(body[match_at..].contains("\"a\" =>"));
+    }
+
+    // verify the supplied project keeps its active costume reporter and shadow selector distinct.
+    #[test]
+    fn detect_keys_fixture_uses_connected_reporter_and_shadow_fallback() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/detect-keys.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let sprite = project
+            .targets
+            .iter()
+            .find(|target| target.name == "Sprite1")
+            .unwrap();
+        assert_eq!(sprite.costumes[0].name, "w");
+
+        let output = generate(&project);
+        assert!(output.contains("state.key_pressed(state.costume_number_name(false))"));
+        assert!(output.contains("state.key_pressed(\"up arrow\")"));
+        assert!(!output.contains("state.key_pressed(\"w\")"));
+        assert!(output.contains("\"up arrow\" => { for instance in state.instances_for_target(1)"));
+        assert!(output.contains("\"w\" => { for instance in state.instances_for_target(1)"));
+        assert!(output.contains("fn key_hat_key(&self) -> Option<(usize, usize)>"));
+        assert!(output.contains("self.scheduler.start_key_hats(scripts)"));
+        let key_hat_impl = output
+            .split("fn key_hat_key(&self) -> Option<(usize, usize)>")
+            .nth(1)
+            .unwrap()
+            .split("fn restart_for_broadcast")
+            .next()
+            .unwrap();
+        assert!(!key_hat_impl.contains("_ => None"));
+    }
+
+    // ensure an input-bearing reporter monitor evaluates in the monitor target's state context.
+    #[test]
+    fn input_reporter_monitor_uses_its_block_input_and_target_context() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Stage", "isStage": true, "variables": {}, "blocks": {}
+                }, {
+                    "name": "Sprite1", "isStage": false, "variables": {},
+                    "blocks": {
+                        "key": {"opcode":"sensing_keypressed", "inputs":{"KEY_OPTION":[3,"costume",[10,"w"]]}, "fields":{}, "parent":null, "next":null},
+                        "costume": {"opcode":"looks_costumenumbername", "inputs":{}, "fields":{"NUMBER_NAME":["name",null]}, "parent":"key", "next":null}
+                    }
+                }],
+                "monitors": [{
+                    "id":"key", "opcode":"sensing_keypressed", "params":{"KEY_OPTION":"space"},
+                    "spriteName":"Sprite1", "visible":true
+                }]
+            }).to_string(),
+        ).unwrap();
+        let output = generate(&project);
+        assert!(output.contains("state.key_pressed(state.costume_number_name(false))"));
+        assert!(output.contains("self.state.original_instance(1)"));
+        assert!(output.contains("self.state.set_current_instance(instance)"));
     }
 
     #[test]

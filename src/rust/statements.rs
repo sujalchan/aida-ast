@@ -369,39 +369,47 @@ fn generate_resumable_block(
                     InputValue::BlockReference(id) => graph.block_pcs.get(id).copied(),
                     _ => None,
                 });
-            line(
-                output,
-                4,
-                &format!("let repeat_count = scratch_round({times}).max(0.0) as usize;"),
+            let fused = generate_warp_repeat_list_append(
+                target, block, graph, variables, lists, arguments, &times, slot, next_pc, output,
+                indent,
             );
-            line(
-                output,
-                4,
-                &format!("script.frames.last_mut().unwrap().repeat_counts[{slot}] = repeat_count;"),
-            );
-            line(output, indent + 1, "if repeat_count == 0 {");
-            line(
-                output,
-                indent + 2,
-                &format!(
-                    "script.frames.last_mut().unwrap().pc = {};",
-                    pc_literal(next_pc)
-                ),
-            );
-            line(output, indent + 1, "} else {");
-            line(
-                output,
-                indent + 2,
-                &format!(
-                    "script.frames.last_mut().unwrap().pc = {};",
-                    branch_pc.unwrap_or(boundary)
-                ),
-            );
-            if branch_pc.is_none() {
-                line(output, indent + 2, "continue;");
+            if !fused {
+                line(
+                    output,
+                    4,
+                    &format!("let repeat_count = scratch_round({times}).max(0.0) as usize;"),
+                );
+                line(
+                    output,
+                    4,
+                    &format!(
+                        "script.frames.last_mut().unwrap().repeat_counts[{slot}] = repeat_count;"
+                    ),
+                );
+                line(output, indent + 1, "if repeat_count == 0 {");
+                line(
+                    output,
+                    indent + 2,
+                    &format!(
+                        "script.frames.last_mut().unwrap().pc = {};",
+                        pc_literal(next_pc)
+                    ),
+                );
+                line(output, indent + 1, "} else {");
+                line(
+                    output,
+                    indent + 2,
+                    &format!(
+                        "script.frames.last_mut().unwrap().pc = {};",
+                        branch_pc.unwrap_or(boundary)
+                    ),
+                );
+                if branch_pc.is_none() {
+                    line(output, indent + 2, "continue;");
+                }
+                line(output, indent + 1, "}");
+                line(output, indent + 1, "continue;");
             }
-            line(output, indent + 1, "}");
-            line(output, indent + 1, "continue;");
         }
         "control_repeat_until" | "control_while" => {
             let condition = boolean_input(
@@ -719,6 +727,167 @@ fn generate_resumable_block(
         }
     }
     line(output, indent, "},");
+}
+
+// fuse a warp repeat whose only body action appends to one list, checking the watchdog by chunk.
+#[allow(clippy::too_many_arguments)]
+fn generate_warp_repeat_list_append(
+    target: &ScratchTarget,
+    repeat: &ScratchBlock,
+    graph: &ScriptGraph,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    times: &str,
+    repeat_slot: usize,
+    next_pc: usize,
+    output: &mut String,
+    indent: usize,
+) -> bool {
+    let Some(InputValue::BlockReference(body_id)) =
+        repeat.inputs.get("SUBSTACK").and_then(parse_input)
+    else {
+        return false;
+    };
+    let Some(body) = target.blocks.get(body_id) else {
+        return false;
+    };
+    if body.opcode != "data_addtolist" || body.next.is_some() {
+        return false;
+    }
+    let Some(list) = list_field(body, "LIST", lists) else {
+        return false;
+    };
+    let Some(body_pc) = graph.block_pcs.get(body_id).copied() else {
+        return false;
+    };
+    let item = owned_input(target, body.inputs.get("ITEM"), variables, lists, arguments);
+    let item_reads_state = item.contains("state.");
+
+    line(
+        output,
+        indent + 1,
+        "if script.frames.last().unwrap().warp_mode {",
+    );
+    line(
+        output,
+        indent + 2,
+        &format!("let repeat_count = scratch_round({times}).max(0.0) as usize;"),
+    );
+    line(
+        output,
+        indent + 2,
+        &format!("script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_count;"),
+    );
+    line(
+        output,
+        indent + 2,
+        "let mut repeat_remaining = repeat_count;",
+    );
+    line(output, indent + 2, "while repeat_remaining > 0 {");
+    line(
+        output,
+        indent + 3,
+        "let repeat_chunk = repeat_remaining.min(1024);",
+    );
+    line(output, indent + 3, "let mut scratch_list_changed = false;");
+    if item_reads_state {
+        line(output, indent + 3, "for _ in 0..repeat_chunk {");
+        line(
+            output,
+            indent + 4,
+            &format!("let scratch_list_item: ScratchValue = {item};"),
+        );
+        line(
+            output,
+            indent + 4,
+            &format!(
+                "scratch_list_changed |= state.list_mut({}).add(scratch_list_item);",
+                list.slot
+            ),
+        );
+        line(output, indent + 3, "}");
+    } else {
+        line(
+            output,
+            indent + 3,
+            &format!(
+                "scratch_list_changed = state.list_mut({}).add_generated(repeat_chunk, || {{ let scratch_list_item: ScratchValue = {item}; scratch_list_item }});",
+                list.slot
+            ),
+        );
+    }
+    line(output, indent + 3, "repeat_remaining -= repeat_chunk;");
+    line(
+        output,
+        indent + 3,
+        &format!(
+            "script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_remaining;"
+        ),
+    );
+    line(
+        output,
+        indent + 3,
+        &format!(
+            "state.list_changed_result({}, scratch_list_changed);",
+            list.slot
+        ),
+    );
+    line(
+        output,
+        indent + 3,
+        "if script.warp_budget.expired_now(clock) {",
+    );
+    line(
+        output,
+        indent + 4,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 {{ {body_pc} }} else {{ {} }};",
+            pc_literal(next_pc)
+        ),
+    );
+    line(output, indent + 4, "return ScriptStatus::Yield;");
+    line(output, indent + 3, "}");
+    line(output, indent + 2, "}");
+    line(
+        output,
+        indent + 2,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = {};",
+            pc_literal(next_pc)
+        ),
+    );
+    line(output, indent + 2, "continue;");
+    line(output, indent + 1, "} else {");
+    line(
+        output,
+        indent + 2,
+        &format!("let repeat_count = scratch_round({times}).max(0.0) as usize;"),
+    );
+    line(
+        output,
+        indent + 2,
+        &format!("script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_count;"),
+    );
+    line(output, indent + 2, "if repeat_count == 0 {");
+    line(
+        output,
+        indent + 3,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = {};",
+            pc_literal(next_pc)
+        ),
+    );
+    line(output, indent + 2, "} else {");
+    line(
+        output,
+        indent + 3,
+        &format!("script.frames.last_mut().unwrap().pc = {body_pc};"),
+    );
+    line(output, indent + 2, "}");
+    line(output, indent + 2, "continue;");
+    line(output, indent + 1, "}");
+    true
 }
 
 fn generate_resumable_block_chain(
@@ -1597,16 +1766,9 @@ fn generate_resumable_statement(
             }
             _ => {}
         },
+        // use mutation results instead of retaining an arc snapshot across each generated write.
         "data_addtolist" => {
             if let Some(list) = list_field(block, "LIST", lists) {
-                line(
-                    output,
-                    indent,
-                    &format!(
-                        "let scratch_list_before = state.list_before_change({});",
-                        list.slot
-                    ),
-                );
                 let input = block.inputs.get("ITEM");
                 let item = owned_input(target, input, variables, lists, arguments);
                 line(
@@ -1617,12 +1779,18 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!("state.list_mut({}).add(scratch_list_item);", list.slot),
+                    &format!(
+                        "let scratch_list_changed = state.list_mut({}).add(scratch_list_item);",
+                        list.slot
+                    ),
                 );
                 line(
                     output,
                     indent,
-                    &format!("state.list_changed({}, scratch_list_before);", list.slot),
+                    &format!(
+                        "state.list_changed_result({}, scratch_list_changed);",
+                        list.slot
+                    ),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -1630,14 +1798,6 @@ fn generate_resumable_statement(
         }
         "data_deleteoflist" => {
             if let Some(list) = list_field(block, "LIST", lists) {
-                line(
-                    output,
-                    indent,
-                    &format!(
-                        "let scratch_list_before = state.list_before_change({});",
-                        list.slot
-                    ),
-                );
                 let index = owned_input(
                     target,
                     block.inputs.get("INDEX"),
@@ -1653,12 +1813,18 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!("state.list_mut({}).delete(scratch_list_index);", list.slot),
+                    &format!(
+                        "let scratch_list_changed = state.list_mut({}).delete(scratch_list_index);",
+                        list.slot
+                    ),
                 );
                 line(
                     output,
                     indent,
-                    &format!("state.list_changed({}, scratch_list_before);", list.slot),
+                    &format!(
+                        "state.list_changed_result({}, scratch_list_changed);",
+                        list.slot
+                    ),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -1670,19 +1836,17 @@ fn generate_resumable_statement(
                     output,
                     indent,
                     &format!(
-                        "let scratch_list_before = state.list_before_change({});",
+                        "let scratch_list_changed = state.list_mut({}).delete_all();",
                         list.slot
                     ),
                 );
                 line(
                     output,
                     indent,
-                    &format!("state.list_mut({}).delete_all();", list.slot),
-                );
-                line(
-                    output,
-                    indent,
-                    &format!("state.list_changed({}, scratch_list_before);", list.slot),
+                    &format!(
+                        "state.list_changed_result({}, scratch_list_changed);",
+                        list.slot
+                    ),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -1690,14 +1854,6 @@ fn generate_resumable_statement(
         }
         "data_insertatlist" | "data_replaceitemoflist" => {
             if let Some(list) = list_field(block, "LIST", lists) {
-                line(
-                    output,
-                    indent,
-                    &format!(
-                        "let scratch_list_before = state.list_before_change({});",
-                        list.slot
-                    ),
-                );
                 let input = block.inputs.get("ITEM");
                 let item = owned_input(target, input, variables, lists, arguments);
                 let index = owned_input(
@@ -1722,7 +1878,7 @@ fn generate_resumable_statement(
                         output,
                         indent,
                         &format!(
-                            "state.list_mut({}).insert(scratch_list_item, scratch_list_index);",
+                            "let scratch_list_changed = state.list_mut({}).insert(scratch_list_item, scratch_list_index);",
                             list.slot
                         ),
                     );
@@ -1731,7 +1887,7 @@ fn generate_resumable_statement(
                         output,
                         indent,
                         &format!(
-                            "state.list_mut({}).replace(scratch_list_index, scratch_list_item);",
+                            "let scratch_list_changed = state.list_mut({}).replace(scratch_list_index, scratch_list_item);",
                             list.slot
                         ),
                     );
@@ -1739,7 +1895,10 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!("state.list_changed({}, scratch_list_before);", list.slot),
+                    &format!(
+                        "state.list_changed_result({}, scratch_list_changed);",
+                        list.slot
+                    ),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");

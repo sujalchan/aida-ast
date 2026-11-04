@@ -329,7 +329,10 @@ Monitor display support does not imply that a reporter can be used by a script o
 | `motion_xposition`, `motion_yposition`, `motion_direction`, `looks_size` | Motion reporters read the scheduled sprite in scripts; monitors use the named sprite snapshot. |
 | `looks_backdropnumbername` | Selected Stage backdrop name or one-based number. |
 | `sensing_current`, `sensing_dayssince2000`, `sensing_mousex`, `sensing_mousey`, `sensing_mousedown` | Current runtime values, refreshed independently from script reporter evaluation. |
+| `sensing_keypressed` | AIDA-only saved monitor records use live held-key state and their reporter input when its block is present; Scratch does not expose a standard checkbox monitor. |
 | `sensing_timer` | Renderer clock, updated while the monitor is visible. |
-| `sensing_keypressed`, `sensing_online`, `sensing_username`, `sensing_loudness` | Runtime reporter values; online is `false`, username defaults to `playerNNNN`, and loudness is `-1` without microphone input. |
+| `sensing_online`, `sensing_username`, `sensing_loudness` | Runtime reporter values; online is `false`, username defaults to `playerNNNN`, and loudness is `-1` without microphone input. |
 
 Other reporter monitors can display their saved project value, but are not live unless a source is listed above. Monitor data is batched at the renderer cadence; do not add monitor polling to generated blocks or variable-read hot paths.
+
+Keyboard hats and `sensing_keypressed` share normalized held-key state. The key reporter evaluates its connected input in the executing target context.

@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::parser::{InputValue, ScratchProject, ScratchTarget, parse_input};
 
 use super::{
-    expressions::constant_numeric_input,
+    expressions::{constant_numeric_input, expression},
     literals::{line, literal, quote},
     scripts::{generate_green_flag_functions, generate_scripts},
 };
@@ -450,35 +450,50 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     output.push_str(
         "    pub fn presentation_consumed(&mut self) { self.state.presentation_consumed(); }\n",
     );
+    // pass key events through the scheduler's non-restarting per-instance hat gate.
     if uses_click_hats {
-        output.push_str("    pub fn apply_input(&mut self, event: RuntimeInputEvent) { match event { RuntimeInputEvent::PointerButton { pressed, inside_stage, target_instance, draggable, was_dragged, monitor_interaction } => { if pointer_click_activates(pressed, inside_stage, draggable, was_dragged, monitor_interaction) { self.scheduler.start_click_hats(new_click_scripts(target_instance, &self.state)); } }, event => if let Some(key) = self.state.apply_input(event) { let scripts = new_keypress_scripts(&key, &self.state); self.scheduler.add_scripts(scripts); } } }\n");
+        output.push_str("    pub fn apply_input(&mut self, event: RuntimeInputEvent) { match event { RuntimeInputEvent::PointerButton { pressed, inside_stage, target_instance, draggable, was_dragged, monitor_interaction } => { if pointer_click_activates(pressed, inside_stage, draggable, was_dragged, monitor_interaction) { self.scheduler.start_click_hats(new_click_scripts(target_instance, &self.state)); } }, event => if let Some(key) = self.state.apply_input(event) { let scripts = new_keypress_scripts(&key, &self.state); self.scheduler.start_key_hats(scripts); } } }\n");
     } else {
-        output.push_str("    pub fn apply_input(&mut self, event: RuntimeInputEvent) { if let Some(key) = self.state.apply_input(event) { let scripts = new_keypress_scripts(&key, &self.state); self.scheduler.add_scripts(scripts); } }\n");
+        output.push_str("    pub fn apply_input(&mut self, event: RuntimeInputEvent) { if let Some(key) = self.state.apply_input(event) { let scripts = new_keypress_scripts(&key, &self.state); self.scheduler.start_key_hats(scripts); } }\n");
     }
     output.push_str(
         "    pub fn set_loudness(&mut self, value: f64) { self.state.set_loudness(value); }\n",
     );
-    let monitor_reporters = reporter_monitor_values(project);
+    let monitor_reporters = reporter_monitor_values(project, &variables, &lists);
     let snapshot_base = if uses_project_timer {
         "self.state.observable_snapshot_with_timer(tick, self.scheduler.now_millis())"
     } else {
         "self.state.observable_snapshot(tick)"
     };
-    output.push_str(&format!("    pub fn observable_snapshot(&self, tick: usize) -> RuntimeSnapshot {{ let mut snapshot = {snapshot_base};\n"));
+    // reporter monitors with connected inputs temporarily use their declared target context.
+    output.push_str(&format!("    pub fn observable_snapshot(&mut self, tick: usize) -> RuntimeSnapshot {{ let mut snapshot = {snapshot_base};\n"));
     if !monitor_reporters.is_empty() {
-        output.push_str("        snapshot.reporters = vec![\n");
-        for (key, expression) in monitor_reporters {
-            line(
-                &mut output,
-                3,
-                &format!(
-                    "ReporterSnapshot {{ key: {}.to_owned(), value: ({}).into() }},",
-                    quote(&key),
-                    expression
-                ),
-            );
+        output.push_str(&format!(
+            "        snapshot.reporters = Vec::with_capacity({});\n",
+            monitor_reporters.len()
+        ));
+        for (key, expression, target_context) in monitor_reporters {
+            if let Some(target_index) = target_context {
+                line(
+                    &mut output,
+                    2,
+                    &format!(
+                        "{{ let previous_instance = self.state.current_instance(); let value: ScratchValue = if let Some(instance) = self.state.original_instance({target_index}) {{ self.state.set_current_instance(instance); let value = {{ let state = &self.state; let _ = state; ({expression}).into() }}; self.state.set_current_instance(previous_instance); value }} else {{ let state = &self.state; let _ = state; ({expression}).into() }}; snapshot.reporters.push(ReporterSnapshot {{ key: {}.to_owned(), value }}); }}",
+                        quote(&key)
+                    ),
+                );
+            } else {
+                line(
+                    &mut output,
+                    2,
+                    &format!(
+                        "{{ let state = &self.state; let _ = state; let value: ScratchValue = ({}).into(); snapshot.reporters.push(ReporterSnapshot {{ key: {}.to_owned(), value }}); }}",
+                        expression,
+                        quote(&key),
+                    ),
+                );
+            }
         }
-        output.push_str("        ];\n");
     }
     output.push_str("        snapshot }\n");
     output.push_str("    pub fn take_pending_pen_commands(&mut self) -> Vec<PenCommand> { self.state.take_pending_pen_commands() }\n");
@@ -525,6 +540,7 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         "scratch_number_operand",
         "scratch_or",
         "scratch_random",
+        "scratch_random_constant",
         "scratch_round",
         "scratch_sin",
         "scratch_string",
@@ -563,7 +579,11 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
     format!("use crate::runtime::{{{}}};\n\n", used.join(", "))
 }
 
-fn reporter_monitor_values(project: &ScratchProject) -> Vec<(String, String)> {
+fn reporter_monitor_values(
+    project: &ScratchProject,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+) -> Vec<(String, String, Option<usize>)> {
     project
         .monitors
         .iter()
@@ -574,6 +594,7 @@ fn reporter_monitor_values(project: &ScratchProject) -> Vec<(String, String)> {
                     .as_deref()
                     .map_or(target.is_stage, |sprite| target.name == sprite)
             });
+            let mut target_context = None;
             let expression = match monitor.opcode.as_str() {
                 "sensing_current" => {
                     let method = match monitor
@@ -611,12 +632,34 @@ fn reporter_monitor_values(project: &ScratchProject) -> Vec<(String, String)> {
                     monitor_target.map_or(0, |(index, _)| index)
                 ),
                 "sensing_keypressed" => {
-                    let key = monitor
-                        .params
-                        .get("KEY_OPTION")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default();
-                    format!("self.state.key_pressed({})", quote(key))
+                    // a nonstandard saved monitor may point back to its full reporter block.
+                    let active_block = monitor_target.and_then(|(index, target)| {
+                        target
+                            .blocks
+                            .get(&monitor.id)
+                            .map(|block| (index, target, block))
+                    });
+                    if let Some((index, target, block)) = active_block {
+                        target_context = Some(index);
+                        format!(
+                            "state.key_pressed({})",
+                            expression(
+                                target,
+                                block.inputs.get("KEY_OPTION"),
+                                variables,
+                                lists,
+                                &HashMap::new(),
+                                &mut HashSet::new(),
+                            )
+                        )
+                    } else {
+                        let key = monitor
+                            .params
+                            .get("KEY_OPTION")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default();
+                        format!("state.key_pressed({})", quote(key))
+                    }
                 }
                 // these reporters have their own snapshot paths.
                 "data_variable"
@@ -635,7 +678,7 @@ fn reporter_monitor_values(project: &ScratchProject) -> Vec<(String, String)> {
                 || format!("__reporter/{}/{}", monitor.opcode, monitor.id),
                 |target| format!("__reporter/{target}/{}/{}", monitor.opcode, monitor.id),
             );
-            Some((key, expression))
+            Some((key, expression, target_context))
         })
         .collect()
 }
