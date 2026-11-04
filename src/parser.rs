@@ -69,6 +69,11 @@ pub struct ScratchTarget {
     pub size: f64,
     #[serde(default = "default_visible")]
     pub visible: bool,
+    #[serde(default = "default_volume")]
+    pub volume: f64,
+    // retain target drag metadata for Scratch-compatible pointer event timing.
+    #[serde(default)]
+    pub draggable: bool,
 
     #[serde(default, deserialize_with = "deserialize_blocks")]
     pub blocks: HashMap<String, ScratchBlock>,
@@ -98,6 +103,9 @@ fn default_size() -> f64 {
 }
 fn default_visible() -> bool {
     true
+}
+fn default_volume() -> f64 {
+    100.0
 }
 
 #[derive(Debug, Deserialize)]

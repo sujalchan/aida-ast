@@ -10,11 +10,11 @@ The opcode audit used Scratch Blocks `develop` at [`95817145`](https://github.co
 
 | Fully implemented | Partially implemented | Not implemented |
 |---:|---:|---:|
-| **101** | **4** | **29** |
+| **113** | **1** | **20** |
 
 These totals count only the current Scratch runtime opcode section below. Editor and serialized-input helpers, legacy compatibility opcodes, and AIDA extension examples are excluded.
 
-**Generated counts:** current runtime: 134 (101 `✓`, 4 `-`, 29 `x`); editor and serialized helpers: 30; legacy no-ops: 9; legacy executable: 12; AIDA extension examples: 10; total classified identifiers: 195.
+**Generated counts:** current runtime: 134 (113 `✓`, 1 `-`, 20 `x`); editor and serialized helpers: 30; legacy no-ops: 9; legacy executable: 12; AIDA extension examples: 10; total classified identifiers: 195.
 
 The counts are checked against the section classification, the unique opcodes in [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv), and the four separately handled custom-procedure opcodes by `scratch_block_support_inventory_is_complete_and_counts_match`.
 
@@ -75,11 +75,11 @@ These are Scratch VM blocks that represent runtime behavior, including hats, rep
 | Scratch opcode | AIDA text output | AIDA Rust runtime |
 |---|:---:|:---:|
 | `event_whenflagclicked` | ✓ | ✓ |
-| `event_whenthisspriteclicked` | ✓ | - |
-| `event_whenstageclicked` | ✓ | - |
+| `event_whenthisspriteclicked` | ✓ | ✓ |
+| `event_whenstageclicked` | ✓ | ✓ |
 | `event_whenbroadcastreceived` | ✓ | ✓ |
 | `event_whenbackdropswitchesto` | ✓ | ✓ |
-| `event_whengreaterthan` | ✓ | - |
+| `event_whengreaterthan` | ✓ | ✓ |
 | `event_broadcast` | ✓ | ✓ |
 | `event_broadcastandwait` | ✓ | ✓ |
 | `event_whenkeypressed` | ✓ | ✓ |
@@ -184,15 +184,15 @@ These are Scratch VM blocks that represent runtime behavior, including hats, rep
 
 | Scratch opcode | AIDA text output | AIDA Rust runtime |
 |---|:---:|:---:|
-| `sound_play` | ✓ | x |
-| `sound_playuntildone` | ✓ | x |
-| `sound_stopallsounds` | ✓ | x |
-| `sound_seteffectto` | ✓ | x |
-| `sound_changeeffectby` | ✓ | x |
-| `sound_cleareffects` | ✓ | x |
-| `sound_changevolumeby` | ✓ | x |
-| `sound_setvolumeto` | ✓ | x |
-| `sound_volume` | ✓ | x |
+| `sound_play` | ✓ | ✓ |
+| `sound_playuntildone` | ✓ | ✓ |
+| `sound_stopallsounds` | ✓ | ✓ |
+| `sound_seteffectto` | ✓ | ✓ |
+| `sound_changeeffectby` | ✓ | ✓ |
+| `sound_cleareffects` | ✓ | ✓ |
+| `sound_changevolumeby` | ✓ | ✓ |
+| `sound_setvolumeto` | ✓ | ✓ |
+| `sound_volume` | ✓ | ✓ |
 
 ### Pen extension
 

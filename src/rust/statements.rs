@@ -447,7 +447,7 @@ fn generate_resumable_block(
             line(output, indent + 1, "}");
             line(
                 output,
-                indent + 1,
+                indent + 2,
                 &format!(
                     "script.frames.last_mut().unwrap().pc = {};",
                     pc_literal(next_pc)
@@ -534,6 +534,123 @@ fn generate_resumable_block(
                 indent + 1,
                 "return ScriptStatus::WaitUntil(wait_deadline);",
             );
+        }
+        "sound_playuntildone" => {
+            let selector = owned_input(
+                target,
+                block.inputs.get("SOUND_MENU"),
+                variables,
+                lists,
+                arguments,
+            );
+            line(
+                output,
+                indent + 1,
+                &format!("let scratch_sound_selector: ScratchValue = {selector};"),
+            );
+            line(
+                output,
+                indent + 1,
+                "let sound_wait = state.start_sound(scratch_sound_selector, clock.now_millis());",
+            );
+            line(
+                output,
+                indent + 1,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    pc_literal(next_pc)
+                ),
+            );
+            line(
+                output,
+                indent + 1,
+                "if let Some(sound_wait) = sound_wait { return ScriptStatus::WaitForSignal(sound_wait); }",
+            );
+            line(output, indent + 1, "continue;");
+        }
+        "sound_seteffectto" | "sound_changeeffectby" => {
+            let effect = field_value(block, "EFFECT")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let effect = match effect.as_str() {
+                "pitch" => "Some(ScratchSoundEffect::Pitch)",
+                "pan" => "Some(ScratchSoundEffect::Pan)",
+                _ => "None",
+            };
+            let value = expression(
+                target,
+                block.inputs.get("VALUE"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent + 1,
+                &format!("if let Some(scratch_sound_effect) = {effect} {{"),
+            );
+            line(
+                output,
+                indent + 2,
+                &format!(
+                    "state.set_sound_effect(scratch_sound_effect, scratch_to_number({value}), {}, clock.now_millis());",
+                    block.opcode == "sound_changeeffectby"
+                ),
+            );
+            line(
+                output,
+                indent + 2,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    pc_literal(next_pc)
+                ),
+            );
+            line(output, indent + 2, "return ScriptStatus::Yield;");
+            line(output, indent + 1, "} else {");
+            line(
+                output,
+                indent + 2,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    pc_literal(next_pc)
+                ),
+            );
+            line(output, indent + 2, "continue;");
+            line(output, indent + 1, "}");
+        }
+        "sound_setvolumeto" | "sound_changevolumeby" => {
+            let value = expression(
+                target,
+                block.inputs.get("VOLUME"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent + 1,
+                &format!(
+                    "state.set_sound_volume(scratch_to_number({value}), {}, clock.now_millis());",
+                    block.opcode == "sound_changevolumeby"
+                ),
+            );
+            line(
+                output,
+                indent + 1,
+                "if REFRESH_SOUND_VOLUME_MONITOR { state.request_presentation(); }",
+            );
+            line(
+                output,
+                indent + 1,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    pc_literal(next_pc)
+                ),
+            );
+            line(output, indent + 1, "return ScriptStatus::Yield;");
         }
         "looks_switchbackdropto" | "looks_nextbackdrop" => {
             generate_resumable_statement(
@@ -1090,6 +1207,11 @@ fn is_straight_line_block(block: &ScratchBlock) -> bool {
                 | "looks_thinkforsecs"
                 | "looks_switchbackdropto"
                 | "looks_nextbackdrop"
+                | "sound_playuntildone"
+                | "sound_seteffectto"
+                | "sound_changeeffectby"
+                | "sound_setvolumeto"
+                | "sound_changevolumeby"
         )
         && block.opcode != "procedures_call"
         && block.opcode != "event_broadcast"
@@ -1294,6 +1416,28 @@ fn generate_resumable_statement(
             );
         }
         "pen_clear" => line(output, indent, "state.clear_pen();"),
+        "sound_play" => {
+            let selector = owned_input(
+                target,
+                block.inputs.get("SOUND_MENU"),
+                variables,
+                lists,
+                arguments,
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "let scratch_sound_selector: ScratchValue = {selector}; state.start_sound(scratch_sound_selector, clock.now_millis());"
+                ),
+            );
+        }
+        "sound_stopallsounds" => line(output, indent, "state.stop_all_sounds(clock.now_millis());"),
+        "sound_cleareffects" => line(
+            output,
+            indent,
+            "state.clear_sound_effects(clock.now_millis());",
+        ),
         "pen_penDown" => line(output, indent, "state.pen_down();"),
         "pen_penUp" => line(output, indent, "state.pen_up();"),
         "pen_stamp" => line(output, indent, "state.stamp();"),

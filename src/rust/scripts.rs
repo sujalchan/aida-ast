@@ -15,13 +15,14 @@
 //! emits resumable custom block and green flag script frames.
 
 use std::collections::HashMap;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde_json::Value;
 
 use crate::parser::{InputValue, ScratchProject, ScratchTarget, parse_input};
 
 use super::{
+    expressions::expression,
     literals::{line, quote},
     project::{ListInfo, VariableInfo, rust_identifier},
     statements::generate_resumable_script,
@@ -45,7 +46,7 @@ pub(super) fn generate_green_flag_functions(
     fast_math: bool,
     output: &mut String,
 ) {
-    let scripts = event_scripts(project);
+    let scripts = event_scripts(project, variables, lists);
     if scripts.is_empty() {
         output.push_str("enum GeneratedScript {}\n\nimpl ResumableScript for GeneratedScript {\n    fn step(&mut self, _state: &mut ScratchState, _clock: &dyn Clock) -> ScriptStatus { match *self {} }\n}\n\n");
         return;
@@ -135,6 +136,35 @@ pub(super) fn generate_green_flag_functions(
             );
         }
     }
+    output.push_str("        _ => None,\n    } }\n    fn edge_hat_key(&self) -> Option<(usize, usize)> { match self {\n");
+    for (index, script) in scripts.iter().enumerate() {
+        if script.hat.opcode == "event_whengreaterthan" {
+            line(
+                output,
+                3,
+                &format!(
+                    "Self::{}(instance, _) => Some(({index}, *instance)),",
+                    script.variant
+                ),
+            );
+        }
+    }
+    output.push_str("        _ => None,\n    } }\n    fn click_hat_key(&self) -> Option<(usize, usize)> { match self {\n");
+    for (index, script) in scripts.iter().enumerate() {
+        if matches!(
+            script.hat.opcode.as_str(),
+            "event_whenthisspriteclicked" | "event_whenstageclicked"
+        ) {
+            line(
+                output,
+                3,
+                &format!(
+                    "Self::{}(instance, _) => Some(({index}, *instance)),",
+                    script.variant
+                ),
+            );
+        }
+    }
     output.push_str(
         "        _ => None,\n    } }\n    fn restart_for_broadcast(&mut self) { match self {\n",
     );
@@ -151,6 +181,8 @@ pub(super) fn generate_green_flag_functions(
         }
     }
     output.push_str("        _ => {},\n    } }\n}\n\n");
+
+    generate_edge_hat_poller(&scripts, output);
 
     for script in &scripts {
         let procedures = procedure_signatures(script.target);
@@ -204,8 +236,13 @@ pub(super) fn generate_green_flag_functions(
 }
 
 // collect green flag hats across targets in stable target and block order.
-pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
-    let scripts = event_scripts(project);
+pub(super) fn generate_scripts(
+    project: &ScratchProject,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    output: &mut String,
+) {
+    let scripts = event_scripts(project, variables, lists);
     let values = scripts
         .iter()
         .filter(|script| script.hat.opcode == "event_whenflagclicked")
@@ -341,6 +378,7 @@ pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
             "#[allow(dead_code, unused_variables, unused_mut)]\nfn new_keypress_scripts(key: &str, state: &ScratchState) -> Vec<GeneratedScript> {{ let mut scripts = Vec::new(); {any_key_starters} match key {{ {key_match} }} scripts }}\n"
         ),
     );
+    generate_click_hat_starter(&scripts, output);
     let mut clone_targets = Vec::new();
     for target_index in 0..project.targets.len() {
         let values = scripts
@@ -400,6 +438,88 @@ pub(super) fn generate_scripts(project: &ScratchProject, output: &mut String) {
     }
 }
 
+// generate event dispatch for clicks after the graphical thread has picked a target.
+fn generate_click_hat_starter(scripts: &[GreenFlagScript<'_>], output: &mut String) {
+    let sprite_groups = scripts
+        .iter()
+        .filter(|script| {
+            script.hat.opcode == "event_whenthisspriteclicked" && !script.target.is_stage
+        })
+        .fold(
+            BTreeMap::<usize, Vec<&GreenFlagScript<'_>>>::new(),
+            |mut groups, script| {
+                groups.entry(script.target_index).or_default().push(script);
+                groups
+            },
+        );
+    let sprite_arms = sprite_groups
+        .into_iter()
+        .map(|(target, scripts)| {
+            let starters = scripts
+                .into_iter()
+                .map(|script| format!("scripts.push(new_{}_for(instance));", script.function))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{target} => {{ {starters} }}")
+        })
+        .collect::<Vec<_>>();
+    let sprite_match = if sprite_arms.is_empty() {
+        "_ => {}".to_owned()
+    } else {
+        format!("{}, _ => {{}}", sprite_arms.join(", "))
+    };
+    let stage_starters = scripts
+        .iter()
+        .filter(|script| script.hat.opcode == "event_whenstageclicked" && script.target.is_stage)
+        .map(|script| {
+            format!(
+                "if let Some(instance) = state.original_instance({}) {{ scripts.push(new_{}_for(instance)); }}",
+                script.target_index, script.function
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    line(
+        output,
+        0,
+        &format!(
+            "#[allow(dead_code, unused_variables, unused_mut)]\nfn new_click_scripts(target_instance: Option<usize>, state: &ScratchState) -> Vec<GeneratedScript> {{ let mut scripts = Vec::new(); match target_instance {{ Some(instance) => if let Some(target) = state.instance_target(instance) {{ match target {{ {sprite_match} }} }}, None => {{ {stage_starters} }} }} scripts }}\n"
+        ),
+    );
+}
+
+// poll compiled edge-hat predicates before stepping scripts, like Scratch VM's runtime step.
+fn generate_edge_hat_poller(scripts: &[GreenFlagScript<'_>], output: &mut String) {
+    let edges = scripts
+        .iter()
+        .enumerate()
+        .filter(|(_, script)| script.hat.opcode == "event_whengreaterthan")
+        .collect::<Vec<_>>();
+    if edges.is_empty() {
+        return;
+    }
+    output.push_str("fn poll_edge_hats(state: &mut ScratchState, now_millis: u64, previous: &mut EdgeHatState) -> Vec<GeneratedScript> { let mut starters = Vec::new();\n");
+    for (index, script) in edges {
+        let value = script.greater_than_value.as_deref().unwrap_or("10.0_f64");
+        let predicate = match script.greater_than_option.as_deref() {
+            Some("loudness") => format!("state.loudness() > scratch_to_number({value})"),
+            Some("timer") => {
+                format!("state.project_timer_seconds(now_millis) > scratch_to_number({value})")
+            }
+            _ => "false".to_owned(),
+        };
+        line(
+            output,
+            1,
+            &format!(
+                "for instance in state.instances_for_target({}) {{ let previous_instance = state.current_instance(); state.set_current_instance(instance); let active = {predicate}; state.set_current_instance(previous_instance); if previous.rising_edge({index}, instance, active) {{ starters.push(new_{}_for(instance)); }} }}",
+                script.target_index, script.function
+            ),
+        );
+    }
+    output.push_str("    previous.retain_live_instances(|instance| state.instance_is_alive(instance)); starters\n}\n\n");
+}
+
 struct GreenFlagScript<'a> {
     target: &'a ScratchTarget,
     hat: &'a crate::parser::ScratchBlock,
@@ -408,9 +528,15 @@ struct GreenFlagScript<'a> {
     target_index: usize,
     broadcast_message: Option<String>,
     backdrop_name: Option<String>,
+    greater_than_option: Option<String>,
+    greater_than_value: Option<String>,
 }
 
-fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
+fn event_scripts<'a>(
+    project: &'a ScratchProject,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+) -> Vec<GreenFlagScript<'a>> {
     let mut scripts = Vec::new();
     for (target_index, target) in project.targets.iter().enumerate() {
         let target_name = rust_identifier(&target.name).to_ascii_lowercase();
@@ -422,6 +548,9 @@ fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
                     | "event_whenbroadcastreceived"
                     | "event_whenkeypressed"
                     | "event_whenbackdropswitchesto"
+                    | "event_whenthisspriteclicked"
+                    | "event_whenstageclicked"
+                    | "event_whengreaterthan"
             )
         }) {
             let function_type = match hat.opcode.as_str() {
@@ -429,6 +558,9 @@ fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
                 "control_start_as_clone" => "clone_start_script",
                 "event_whenkeypressed" => "key_pressed_script",
                 "event_whenbackdropswitchesto" => "backdrop_receiver_script",
+                "event_whenthisspriteclicked" => "sprite_clicked_script",
+                "event_whenstageclicked" => "stage_clicked_script",
+                "event_whengreaterthan" => "greater_than_script",
                 _ => "broadcast_receiver_script",
             };
             let function = format!("{function_type}_{target_name}_{}", scripts.len() + 1);
@@ -450,6 +582,37 @@ fn event_scripts(project: &ScratchProject) -> Vec<GreenFlagScript<'_>> {
                         .and_then(|field| field.first())
                         .and_then(Value::as_str)
                         .map(str::to_owned)
+                } else {
+                    None
+                },
+                greater_than_option: if hat.opcode == "event_whengreaterthan" {
+                    Some(
+                        hat.fields
+                            .get("WHENGREATERTHANMENU")
+                            .and_then(Value::as_array)
+                            .and_then(|field| field.first())
+                            .and_then(Value::as_str)
+                            .unwrap_or("LOUDNESS")
+                            .to_ascii_lowercase(),
+                    )
+                } else {
+                    None
+                },
+                greater_than_value: if hat.opcode == "event_whengreaterthan" {
+                    // compile threshold reporters through the shared expression path.
+                    if hat.inputs.contains_key("VALUE") {
+                        let mut active = HashSet::new();
+                        Some(expression(
+                            target,
+                            hat.inputs.get("VALUE"),
+                            variables,
+                            lists,
+                            &HashMap::new(),
+                            &mut active,
+                        ))
+                    } else {
+                        Some("10.0_f64".to_owned())
+                    }
                 } else {
                     None
                 },
@@ -550,6 +713,7 @@ fn event_hats(target: &ScratchTarget) -> Vec<(&str, &crate::parser::ScratchBlock
                         | "event_whenkeypressed"
                         | "event_whenbroadcastreceived"
                         | "event_whenbackdropswitchesto"
+                        | "event_whengreaterthan"
                         | "control_start_as_clone"
                 )
         })

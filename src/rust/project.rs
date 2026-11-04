@@ -83,6 +83,38 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
             )
         })
     });
+    // omit audio polling entirely from projects without executable sound blocks.
+    let uses_sound = project.targets.iter().any(|target| {
+        target.blocks.values().any(|block| {
+            matches!(
+                block.opcode.as_str(),
+                "sound_play"
+                    | "sound_playuntildone"
+                    | "sound_stopallsounds"
+                    | "sound_seteffectto"
+                    | "sound_changeeffectby"
+                    | "sound_cleareffects"
+                    | "sound_changevolumeby"
+                    | "sound_setvolumeto"
+                    | "sound_volume"
+            )
+        })
+    });
+    // emit renderer input and edge polling only for projects that use those hats.
+    let uses_click_hats = project.targets.iter().any(|target| {
+        target.blocks.values().any(|block| {
+            matches!(
+                block.opcode.as_str(),
+                "event_whenthisspriteclicked" | "event_whenstageclicked"
+            )
+        })
+    });
+    let uses_edge_hats = project.targets.iter().any(|target| {
+        target
+            .blocks
+            .values()
+            .any(|block| block.opcode == "event_whengreaterthan")
+    });
     let uses_backdrop_switches = project.targets.iter().any(|target| {
         target.blocks.values().any(|block| {
             matches!(
@@ -99,12 +131,20 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
             )
         })
     });
+    // timer hats share the same project clock used by Scratch timer reporters.
     let uses_project_timer = project.targets.iter().any(|target| {
         target.blocks.values().any(|block| {
             matches!(
                 block.opcode.as_str(),
                 "sensing_timer" | "sensing_resettimer"
-            )
+            ) || (block.opcode == "event_whengreaterthan"
+                && block
+                    .fields
+                    .get("WHENGREATERTHANMENU")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|field| field.first())
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|value| value.eq_ignore_ascii_case("TIMER")))
         })
     }) || project
         .monitors
@@ -121,6 +161,18 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
                 "sensing_current" | "sensing_dayssince2000"
             )
     });
+    let has_sound_volume_monitor = project
+        .monitors
+        .iter()
+        .any(|monitor| monitor.opcode == "sound_volume");
+    let has_sound_volume_setter = project.targets.iter().any(|target| {
+        target.blocks.values().any(|block| {
+            matches!(
+                block.opcode.as_str(),
+                "sound_setvolumeto" | "sound_changevolumeby"
+            )
+        })
+    });
     let expire_bubbles = if uses_timed_speech {
         "self.state.expire_speech_bubbles(self.scheduler.now_millis()); "
     } else {
@@ -129,9 +181,26 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     let mut output = String::new();
 
     generate_green_flag_functions(project, &variables, &lists, fast_math, &mut output);
-    generate_scripts(project, &mut output);
+    generate_scripts(project, &variables, &lists, &mut output);
 
-    output.push_str("#[allow(dead_code)]\npub struct GeneratedProgram { state: ScratchState, scheduler: ScriptScheduler<GeneratedScript>, frame_order: Vec<u64> }\n\n#[allow(dead_code)]\nimpl GeneratedProgram {\n    pub fn new() -> Self { Self::build(None) }\n    pub fn new_with_clock(clock: Box<dyn Clock>) -> Self { Self::build(Some(clock)) }\n    fn build(clock: Option<Box<dyn Clock>>) -> Self {\n");
+    // refresh volume monitor snapshots only for projects that can change volume.
+    if has_sound_volume_setter {
+        output.push_str(&format!(
+            "const REFRESH_SOUND_VOLUME_MONITOR: bool = {has_sound_volume_monitor};\n"
+        ));
+    }
+
+    let edge_state_field = if uses_edge_hats {
+        ", edge_hat_previous: EdgeHatState"
+    } else {
+        ""
+    };
+    let edge_state_init = if uses_edge_hats {
+        ", edge_hat_previous: EdgeHatState::default()"
+    } else {
+        ""
+    };
+    output.push_str(&format!("#[allow(dead_code)]\npub struct GeneratedProgram {{ state: ScratchState, scheduler: ScriptScheduler<GeneratedScript>, frame_order: Vec<u64>{edge_state_field} }}\n\n#[allow(dead_code)]\nimpl GeneratedProgram {{\n    pub fn new() -> Self {{ Self::build(None) }}\n    pub fn new_with_clock(clock: Box<dyn Clock>) -> Self {{ Self::build(Some(clock)) }}\n    pub fn uses_sound() -> bool {{ {uses_sound} }}\n    pub fn set_sound_library(&mut self, library: SoundLibrary) {{ self.state.set_sound_library(library); }}\n    pub fn enable_realtime_audio(&mut self) -> Result<(), String> {{ self.state.set_realtime_audio(RealtimeAudio::open()?); Ok(()) }}\n    fn build(clock: Option<Box<dyn Clock>>) -> Self {{\n"));
 
     let mut initial_values = vec![String::new(); variables.len()];
     let mut variable_metadata = vec![String::new(); variables.len()];
@@ -241,6 +310,14 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
             &mut output,
             1,
             &format!(
+                "state.set_original_volume({target_index}, {}_f64);",
+                target.volume
+            ),
+        );
+        line(
+            &mut output,
+            1,
+            &format!(
                 "state.set_original_xy({target_index}, {}_f64, {}_f64);",
                 target.x, target.y
             ),
@@ -273,11 +350,15 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     if uses_project_timer {
         output.push_str("state.reset_project_timer(scheduler.now_millis());\n");
     }
-    output.push_str("    Self { state, scheduler, frame_order: Vec::new() }\n    }\n\n");
+    output.push_str(&format!(
+        "    Self {{ state, scheduler, frame_order: Vec::new(){edge_state_init} }}\n    }}\n\n"
+    ));
     output.push_str(
         "    pub fn step(&mut self) -> bool { self.advance() == SchedulerStatus::Progressed }\n",
     );
-    output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { let status = self.scheduler.advance(&mut self.state); self.process_after_step(); status }\n");
+    if uses_edge_hats {
+        output.push_str("    fn update_edge_hats(&mut self) { let starters = poll_edge_hats(&mut self.state, self.scheduler.now_millis(), &mut self.edge_hat_previous); self.scheduler.start_edge_hats(starters); }\n");
+    }
     output.push_str("    fn process_after_step(&mut self) {");
     if uses_broadcasts {
         output.push_str(" if let Some((sender, message, wait)) = self.scheduler.take_broadcast() { let receivers = new_broadcast_scripts(message, &self.state); self.scheduler.broadcast(sender, receivers, wait); }");
@@ -289,22 +370,70 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         output.push_str(" for backdrop in self.state.take_pending_backdrop_events() { let receivers = new_backdrop_scripts(&backdrop, &self.state); self.scheduler.add_scripts(receivers); }");
     }
     output.push_str(" }\n");
-    if uses_broadcasts || uses_clones || uses_backdrop_switches {
-        output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {expire_bubbles}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return status; }} progressed = true; self.process_after_step(); }} }} if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }} }}\n"));
+    let edge_poll = if uses_edge_hats {
+        "self.update_edge_hats(); "
     } else {
-        output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {expire_bubbles}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return status; }} progressed = true; }} }} if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }} }}\n"));
+        ""
+    };
+    let sound_poll = if uses_sound {
+        "self.state.advance_sounds(self.scheduler.now_millis()); for sound_wait in self.state.drain_finished_sounds() { self.scheduler.signal(sound_wait); } "
+    } else {
+        ""
+    };
+    let sound_complete = if uses_sound {
+        "if status == SchedulerStatus::Complete && self.state.has_active_sounds() { SchedulerStatus::WaitingForSignal } else { status }"
+    } else {
+        "status"
+    };
+    output.push_str("    pub fn advance(&mut self) -> SchedulerStatus { ");
+    output.push_str(sound_poll);
+    output.push_str(edge_poll);
+    output.push_str(
+        "let status = self.scheduler.advance(&mut self.state); self.process_after_step(); ",
+    );
+    output.push_str(sound_complete);
+    output.push_str(" }\n");
+    if uses_broadcasts || uses_clones || uses_backdrop_switches {
+        output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {sound_poll}{expire_bubbles}{edge_poll}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return if self.state.has_active_sounds() {{ SchedulerStatus::WaitingForSignal }} else {{ SchedulerStatus::Complete }}; }} progressed = true; self.process_after_step(); }} }} let status = if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }}; {sound_complete} }}\n"));
+    } else {
+        output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {sound_poll}{expire_bubbles}{edge_poll}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return if self.state.has_active_sounds() {{ SchedulerStatus::WaitingForSignal }} else {{ SchedulerStatus::Complete }}; }} progressed = true; }} }} let status = if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }}; {sound_complete} }}\n"));
     }
     output.push_str("    pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }\n");
     if uses_project_timer {
-        output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); self.state.reset_project_timer(self.scheduler.now_millis()); }\n");
+        let clear_edges = if uses_edge_hats {
+            "self.edge_hat_previous.clear(); "
+        } else {
+            ""
+        };
+        let restart_sounds = if uses_sound {
+            "self.state.restart_sounds(self.scheduler.now_millis()); "
+        } else {
+            ""
+        };
+        output.push_str(&format!("    pub fn restart(&mut self) {{ {clear_edges}{restart_sounds}self.state.remove_clones(); self.scheduler.restart(new_scripts()); self.state.reset_project_timer(self.scheduler.now_millis()); }}\n"));
     } else {
-        output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }\n");
+        let clear_edges = if uses_edge_hats {
+            "self.edge_hat_previous.clear(); "
+        } else {
+            ""
+        };
+        let restart_sounds = if uses_sound {
+            "self.state.restart_sounds(self.scheduler.now_millis()); "
+        } else {
+            ""
+        };
+        output.push_str(&format!("    pub fn restart(&mut self) {{ {clear_edges}{restart_sounds}self.state.remove_clones(); self.scheduler.restart(new_scripts()); }}\n"));
     }
+    // stopping scripts leaves edge predicates intact so true hats cannot fire again immediately.
     output
         .push_str("    pub fn stop_all(&mut self) { self.scheduler.stop_all(&mut self.state); }\n");
-    output.push_str(
-        "    pub fn is_complete(&self) -> bool { self.scheduler.active_scripts() == 0 }\n",
-    );
+    if uses_sound {
+        output.push_str("    pub fn is_complete(&self) -> bool { self.scheduler.active_scripts() == 0 && !self.state.has_active_sounds() }\n");
+    } else {
+        output.push_str(
+            "    pub fn is_complete(&self) -> bool { self.scheduler.active_scripts() == 0 }\n",
+        );
+    }
     output.push_str(
         "    pub fn active_script_count(&self) -> usize { self.scheduler.active_scripts() }\n",
     );
@@ -321,7 +450,14 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     output.push_str(
         "    pub fn presentation_consumed(&mut self) { self.state.presentation_consumed(); }\n",
     );
-    output.push_str("    pub fn apply_input(&mut self, event: RuntimeInputEvent) { if let Some(key) = self.state.apply_input(event) { let scripts = new_keypress_scripts(&key, &self.state); self.scheduler.add_scripts(scripts); } }\n");
+    if uses_click_hats {
+        output.push_str("    pub fn apply_input(&mut self, event: RuntimeInputEvent) { match event { RuntimeInputEvent::PointerButton { pressed, inside_stage, target_instance, draggable, was_dragged, monitor_interaction } => { if pointer_click_activates(pressed, inside_stage, draggable, was_dragged, monitor_interaction) { self.scheduler.start_click_hats(new_click_scripts(target_instance, &self.state)); } }, event => if let Some(key) = self.state.apply_input(event) { let scripts = new_keypress_scripts(&key, &self.state); self.scheduler.add_scripts(scripts); } } }\n");
+    } else {
+        output.push_str("    pub fn apply_input(&mut self, event: RuntimeInputEvent) { if let Some(key) = self.state.apply_input(event) { let scripts = new_keypress_scripts(&key, &self.state); self.scheduler.add_scripts(scripts); } }\n");
+    }
+    output.push_str(
+        "    pub fn set_loudness(&mut self, value: f64) { self.state.set_loudness(value); }\n",
+    );
     let monitor_reporters = reporter_monitor_values(project);
     let snapshot_base = if uses_project_timer {
         "self.state.observable_snapshot_with_timer(tick, self.scheduler.now_millis())"
@@ -347,7 +483,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     output.push_str("        snapshot }\n");
     output.push_str("    pub fn take_pending_pen_commands(&mut self) -> Vec<PenCommand> { self.state.take_pending_pen_commands() }\n");
     output.push_str("    pub fn set_observable_event_sink(&mut self, sink: Option<std::sync::mpsc::Sender<ObservableEvent>>) { self.state.set_event_sink(sink); }\n");
-    output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance_frame() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }\n}\n\n");
+    output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance_frame() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::WaitingForSignal => std::thread::sleep(std::time::Duration::from_millis(8)), SchedulerStatus::Complete => break } } }\n}\n\n");
     output.push_str("#[allow(dead_code)]\npub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
     let identifiers = rust_identifiers(&output);
     let imports = runtime_imports(&identifiers);
@@ -399,10 +535,13 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         "GlideState",
         "ObservableEvent",
         "PenCommand",
+        "RealtimeAudio",
         "ResumableScript",
         "ScratchList",
         "ScratchListMetadata",
         "ScratchState",
+        "ScratchSoundEffect",
+        "SoundLibrary",
         "SpriteFenceGeometry",
         "ScratchValue",
         "ScratchVariableMetadata",
@@ -412,6 +551,8 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         "SchedulerStatus",
         "ScriptScheduler",
         "ScriptStatus",
+        "EdgeHatState",
+        "pointer_click_activates",
         "WarpBudget",
     ];
     let used = IMPORTS
@@ -427,6 +568,12 @@ fn reporter_monitor_values(project: &ScratchProject) -> Vec<(String, String)> {
         .monitors
         .iter()
         .filter_map(|monitor| {
+            let monitor_target = project.targets.iter().enumerate().find(|(_, target)| {
+                monitor
+                    .sprite_name
+                    .as_deref()
+                    .map_or(target.is_stage, |sprite| target.name == sprite)
+            });
             let expression = match monitor.opcode.as_str() {
                 "sensing_current" => {
                     let method = match monitor
@@ -459,6 +606,10 @@ fn reporter_monitor_values(project: &ScratchProject) -> Vec<(String, String)> {
                 "sensing_mousey" => "self.state.mouse_y()".to_owned(),
                 "sensing_mousedown" => "self.state.mouse_down()".to_owned(),
                 "sensing_loudness" => "self.state.loudness()".to_owned(),
+                "sound_volume" => format!(
+                    "self.state.sound_volume_for_target({})",
+                    monitor_target.map_or(0, |(index, _)| index)
+                ),
                 "sensing_keypressed" => {
                     let key = monitor
                         .params
@@ -479,16 +630,7 @@ fn reporter_monitor_values(project: &ScratchProject) -> Vec<(String, String)> {
                 | "looks_costumenumbername" => return None,
                 _ => return None,
             };
-            let target_name = project
-                .targets
-                .iter()
-                .find(|target| {
-                    monitor
-                        .sprite_name
-                        .as_deref()
-                        .map_or(target.is_stage, |sprite| target.name == sprite)
-                })
-                .map(|target| target.name.as_str());
+            let target_name = monitor_target.map(|(_, target)| target.name.as_str());
             let key = target_name.map_or_else(
                 || format!("__reporter/{}/{}", monitor.opcode, monitor.id),
                 |target| format!("__reporter/{target}/{}/{}", monitor.opcode, monitor.id),

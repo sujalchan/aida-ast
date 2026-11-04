@@ -175,6 +175,10 @@ fn block_expression(
         "data_variable" => variable_field(block, "VARIABLE", variables)
             .map(|variable| variable.read_expression())
             .unwrap_or_else(|| unsupported_expression("missing variable reference")),
+        "sound_volume" => "state.sound_volume()".to_owned(),
+        "sound_sounds_menu" => field_value(block, "SOUND_MENU")
+            .map(text_literal)
+            .unwrap_or_else(|| unsupported_expression("missing sound menu value")),
         "data_listcontents" => list_field(block, "LIST", lists)
             .map(|list| format!("state.list({}).contents()", list.slot))
             .unwrap_or_else(|| unsupported_expression("missing list reference")),

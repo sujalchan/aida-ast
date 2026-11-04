@@ -1392,4 +1392,86 @@ mod tests {
         assert!(output.contains("state.set_shared(1, scratch_new_value);"));
         assert!(output.contains("state.set(0, scratch_new_value);"));
     }
+
+    #[test]
+    fn sprite_backdrop_event_fixture_generates_scoped_clicks_and_edge_hats() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/sprite-backdrop-events.sb3"
+        );
+        let json = crate::extractor::read_project_json(path).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("state.loudness() > scratch_to_number(-10.0_f64)"));
+        assert!(
+            output
+                .contains("state.project_timer_seconds(now_millis) > scratch_to_number(10.0_f64)")
+        );
+        assert!(output.contains("previous.rising_edge("));
+        assert!(output.contains("self.scheduler.start_edge_hats(starters)"));
+        assert!(output.contains("pointer_click_activates("));
+        assert!(output.contains("state.instance_target(instance)"));
+        assert!(output.contains("None => { if let Some(instance) = state.original_instance(0)"));
+        assert!(output.contains("sprite_clicked_script_sprite1"));
+        assert!(output.contains("stage_clicked_script_stage"));
+        assert!(output.contains("state.reset_project_timer(clock.now_millis());"));
+        assert!(output.contains("state.reset_project_timer(self.scheduler.now_millis());"));
+        assert!(output.contains("pub fn restart(&mut self) { self.edge_hat_previous.clear();"));
+        assert!(
+            output.contains(
+                "pub fn stop_all(&mut self) { self.scheduler.stop_all(&mut self.state); }"
+            )
+        );
+        assert!(!output.contains("-> GeneratedScript { new_greater_than_script_"));
+        assert!(!output.contains("-> GeneratedScript { new_sprite_clicked_script_"));
+    }
+
+    #[test]
+    fn greater_than_hat_defaults_match_scratch_block_defaults() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Stage",
+                    "isStage": true,
+                    "blocks": {
+                        "threshold": {
+                            "opcode": "event_whengreaterthan",
+                            "topLevel": true,
+                            "inputs": {},
+                            "fields": {}
+                        }
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let output = generate(&project);
+        assert!(output.contains("state.loudness() > scratch_to_number(10.0_f64)"));
+    }
+
+    #[test]
+    fn sound_fixture_generates_resumable_playback_and_tick_yielding_effects() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/sound.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("pub fn uses_sound() -> bool { true }"));
+        assert!(output.contains("state.set_original_volume(1, 100_f64);"));
+        assert!(output.contains("state.start_sound(scratch_sound_selector, clock.now_millis())"));
+        assert!(output.contains("ScriptStatus::WaitForSignal(sound_wait)"));
+        assert!(output.contains("ScratchSoundEffect::Pitch"));
+        assert!(output.contains("ScratchSoundEffect::Pan"));
+        assert!(output.contains("state.set_sound_volume(scratch_to_number("));
+        assert!(output.contains("sound_volume_for_target(1)"));
+        assert!(output.contains("const REFRESH_SOUND_VOLUME_MONITOR: bool = true;"));
+        assert!(
+            output.contains("if REFRESH_SOUND_VOLUME_MONITOR { state.request_presentation(); }")
+        );
+        assert!(output.contains("return ScriptStatus::Yield;"));
+        assert!(!output.contains("unsupported statement: sound_"));
+        assert!(!output.contains("unsupported reporter: sound_"));
+    }
 }

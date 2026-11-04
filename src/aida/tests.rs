@@ -51,6 +51,9 @@ fn target(blocks: Vec<(&str, ScratchBlock)>) -> ScratchTarget {
         direction: 90.0,
         size: 100.0,
         visible: true,
+        volume: 100.0,
+        // synthetic targets stay non-draggable unless a test opts in.
+        draggable: false,
         blocks: blocks
             .into_iter()
             .map(|(id, block)| (id.to_owned(), block))
