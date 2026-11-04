@@ -181,6 +181,18 @@ fn block_expression(
         "looks_backdrops" => field_value(block, "BACKDROP")
             .map(text_literal)
             .unwrap_or_else(|| unsupported_expression("missing backdrop menu value")),
+        "looks_costume" => field_value(block, "COSTUME")
+            .map(text_literal)
+            .unwrap_or_else(|| unsupported_expression("missing costume menu value")),
+        "pen_menu_colorParam" => field_value(block, "colorParam")
+            .map(text_literal)
+            .unwrap_or_else(|| unsupported_expression("missing pen color parameter")),
+        "looks_costumenumbername" => {
+            let number = field_value(block, "NUMBER_NAME")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == "number");
+            format!("state.costume_number_name({number})")
+        }
         "looks_backdropnumbername" => {
             let number = field_value(block, "NUMBER_NAME")
                 .and_then(Value::as_str)

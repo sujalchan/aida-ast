@@ -1274,6 +1274,135 @@ fn generate_resumable_statement(
     indent: usize,
 ) {
     match block.opcode.as_str() {
+        "looks_show" => line(output, indent, "state.set_visible(true);"),
+        "looks_hide" => line(output, indent, "state.set_visible(false);"),
+        "looks_switchcostumeto" => {
+            let costume = owned_input(
+                target,
+                block.inputs.get("COSTUME"),
+                variables,
+                lists,
+                arguments,
+            );
+            line(
+                output,
+                indent,
+                &format!("state.switch_costume_to({costume});"),
+            );
+        }
+        "pen_clear" => line(output, indent, "state.clear_pen();"),
+        "pen_penDown" => line(output, indent, "state.pen_down();"),
+        "pen_penUp" => line(output, indent, "state.pen_up();"),
+        "pen_stamp" => line(output, indent, "state.stamp();"),
+        "pen_setPenColorToColor" => {
+            let color = owned_input(
+                target,
+                block.inputs.get("COLOR"),
+                variables,
+                lists,
+                arguments,
+            );
+            line(
+                output,
+                indent,
+                &format!("let scratch_pen_color: ScratchValue = {color};"),
+            );
+            line(
+                output,
+                indent,
+                "state.set_pen_rgb_color(scratch_pen_color);",
+            );
+        }
+        "pen_changePenColorParamBy" | "pen_setPenColorParamTo" => {
+            let parameter = owned_input(
+                target,
+                block.inputs.get("COLOR_PARAM"),
+                variables,
+                lists,
+                arguments,
+            );
+            line(
+                output,
+                indent,
+                &format!("let scratch_pen_parameter: ScratchValue = {parameter};"),
+            );
+            let value = expression(
+                target,
+                block.inputs.get("VALUE"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "state.set_pen_color_parameter(scratch_pen_parameter, scratch_to_number({value}), {});",
+                    block.opcode == "pen_changePenColorParamBy"
+                ),
+            );
+        }
+        "pen_setPenHueToNumber" | "pen_changePenHueBy" => {
+            let value = expression(
+                target,
+                block.inputs.get("HUE"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            let method = if block.opcode == "pen_setPenHueToNumber" {
+                "set_legacy_pen_hue"
+            } else {
+                "change_legacy_pen_hue"
+            };
+            line(
+                output,
+                indent,
+                &format!("state.{method}(scratch_to_number({value}));"),
+            );
+        }
+        "pen_setPenShadeToNumber" | "pen_changePenShadeBy" => {
+            let value = expression(
+                target,
+                block.inputs.get("SHADE"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            let method = if block.opcode == "pen_setPenShadeToNumber" {
+                "set_legacy_pen_shade"
+            } else {
+                "change_legacy_pen_shade"
+            };
+            line(
+                output,
+                indent,
+                &format!("state.{method}(scratch_to_number({value}));"),
+            );
+        }
+        "pen_setPenSizeTo" | "pen_changePenSizeBy" => {
+            let value = expression(
+                target,
+                block.inputs.get("SIZE"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            let method = if block.opcode == "pen_setPenSizeTo" {
+                "set_pen_size"
+            } else {
+                "change_pen_size"
+            };
+            line(
+                output,
+                indent,
+                &format!("state.{method}(scratch_to_number({value}));"),
+            );
+        }
         "sensing_resettimer" => line(
             output,
             indent,

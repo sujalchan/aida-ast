@@ -14,7 +14,7 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **170 Scratch block cases + 4 procedure opcodes** | **92 implemented ✓, 19 partial -, 63 not implemented x** |
+| **Catalog** | **170 Scratch block cases + 4 procedure opcodes** | **110 implemented ✓, 18 partial -, 46 not implemented x** |
 
 ### Control
 
@@ -87,11 +87,11 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 | `looks_changesizeby` | ✓ | x |
 | `looks_changestretchby` | ✓ | x |
 | `looks_cleargraphiceffects` | ✓ | x |
-| `looks_costume` | ✓ | - |
-| `looks_costumenumbername` | ✓ | x |
+| `looks_costume` | ✓ | ✓ |
+| `looks_costumenumbername` | ✓ | ✓ |
 | `looks_goforwardbackwardlayers` | ✓ | x |
 | `looks_gotofrontback` | ✓ | x |
-| `looks_hide` | ✓ | x |
+| `looks_hide` | ✓ | ✓ |
 | `looks_hideallsprites` | ✓ | x |
 | `looks_nextbackdrop` | ✓ | ✓ |
 | `looks_nextcostume` | ✓ | x |
@@ -100,11 +100,11 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 | `looks_seteffectto` | ✓ | x |
 | `looks_setsizeto` | ✓ | x |
 | `looks_setstretchto` | ✓ | x |
-| `looks_show` | ✓ | x |
+| `looks_show` | ✓ | ✓ |
 | `looks_size` | ✓ | - |
 | `looks_switchbackdropto` | ✓ | ✓ |
 | `looks_switchbackdroptoandwait` | ✓ | x |
-| `looks_switchcostumeto` | ✓ | x |
+| `looks_switchcostumeto` | ✓ | ✓ |
 | `looks_think` | ✓ | ✓ |
 | `looks_thinkforsecs` | ✓ | ✓ |
 
@@ -229,25 +229,30 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 
 ### Pen extension
 
-These opcodes are recognized and rendered by AIDA's text generator. Their Rust
-runtime status remains unsupported (`x`); this table does not claim that the
-headless runtime draws or changes pen state.
+Pen commands are lowered by `aida-ast` into target-scoped runtime state. The
+runtime batches compatible strokes and stamps on the persistent GPU pen layer,
+preserving clear and stamp ordering barriers. Stamps use the executing
+instance's costume and transform; clones inherit independent pen state.
+Color parameter blocks use Scratch's numeric conversion, wrap color with the
+VM's inclusive 0–100 wrap interval, and clamp saturation, brightness, and
+transparency to 0–100. RGB color inputs accept Scratch hex and packed-number
+forms, including packed alpha.
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| `pen_changePenColorParamBy` | ✓ | x |
-| `pen_changePenHueBy` | ✓ | x |
-| `pen_changePenShadeBy` | ✓ | x |
-| `pen_changePenSizeBy` | ✓ | x |
-| `pen_clear` | ✓ | x |
-| `pen_penDown` | ✓ | x |
-| `pen_penUp` | ✓ | x |
-| `pen_setPenColorParamTo` | ✓ | x |
-| `pen_setPenColorToColor` | ✓ | x |
-| `pen_setPenHueToNumber` | ✓ | x |
-| `pen_setPenShadeToNumber` | ✓ | x |
-| `pen_setPenSizeTo` | ✓ | x |
-| `pen_stamp` | ✓ | x |
+| `pen_changePenColorParamBy` | ✓ | ✓ |
+| `pen_changePenHueBy` | ✓ | ✓ |
+| `pen_changePenShadeBy` | ✓ | ✓ |
+| `pen_changePenSizeBy` | ✓ | ✓ |
+| `pen_clear` | ✓ | ✓ |
+| `pen_penDown` | ✓ | ✓ |
+| `pen_penUp` | ✓ | ✓ |
+| `pen_setPenColorParamTo` | ✓ | ✓ |
+| `pen_setPenColorToColor` | ✓ | ✓ |
+| `pen_setPenHueToNumber` | ✓ | ✓ |
+| `pen_setPenShadeToNumber` | ✓ | ✓ |
+| `pen_setPenSizeTo` | ✓ | ✓ |
+| `pen_stamp` | ✓ | ✓ |
 
 ## Live monitor sources
 

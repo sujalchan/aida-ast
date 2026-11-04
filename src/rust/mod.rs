@@ -66,6 +66,40 @@ mod tests {
     }
 
     #[test]
+    fn pen_fixture_generates_pen_commands_and_costume_state_without_todos() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/pen-tests.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        for generated in [
+            "state.clear_pen();",
+            "state.pen_down();",
+            "state.pen_up();",
+            "state.stamp();",
+            "state.set_pen_rgb_color(scratch_pen_color);",
+            "state.set_pen_color_parameter(scratch_pen_parameter,",
+            "state.set_pen_size(",
+            "state.switch_costume_to(",
+            "state.set_visible(true);",
+            "state.set_visible(false);",
+            "state.costume_number_name(true)",
+        ] {
+            assert!(
+                output.contains(generated),
+                "missing generated pen path: {generated}"
+            );
+        }
+        assert!(!output.contains("unsupported statement: pen_"));
+        assert!(!output.contains("unsupported reporter: looks_costume"));
+        for parameter in ["color", "saturation", "brightness", "transparency"] {
+            assert!(output.contains(&format!(
+                "let scratch_pen_parameter: ScratchValue = ({parameter:?}).into();"
+            )));
+        }
+    }
+
+    #[test]
     fn sensing_fixture_lowers_reporters_as_values_and_emits_live_monitor_snapshots() {
         let input = concat!(
             env!("CARGO_MANIFEST_DIR"),

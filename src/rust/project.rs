@@ -253,6 +253,20 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
                 target.direction, target.size, target.visible
             ),
         );
+        let costume_names = target
+            .costumes
+            .iter()
+            .map(|costume| format!("{}.to_owned()", quote(&costume.name)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        line(
+            &mut output,
+            1,
+            &format!(
+                "state.set_target_costumes({target_index}, vec![{costume_names}], {});",
+                target.current_costume
+            ),
+        );
     }
 
     output.push_str("let scripts = new_scripts();\nlet scheduler = match clock { Some(clock) => ScriptScheduler::with_clock(scripts, clock), None => ScriptScheduler::new(scripts) };\n");
@@ -331,6 +345,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         output.push_str("        ];\n");
     }
     output.push_str("        snapshot }\n");
+    output.push_str("    pub fn take_pending_pen_commands(&mut self) -> Vec<PenCommand> { self.state.take_pending_pen_commands() }\n");
     output.push_str("    pub fn set_observable_event_sink(&mut self, sink: Option<std::sync::mpsc::Sender<ObservableEvent>>) { self.state.set_event_sink(sink); }\n");
     output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance_frame() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }\n}\n\n");
     output.push_str("#[allow(dead_code)]\npub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
@@ -383,6 +398,7 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         "Clock",
         "GlideState",
         "ObservableEvent",
+        "PenCommand",
         "ResumableScript",
         "ScratchList",
         "ScratchListMetadata",
