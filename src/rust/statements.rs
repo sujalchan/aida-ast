@@ -1314,17 +1314,12 @@ fn generate_resumable_statement(
             );
         }
         "pen_changePenColorParamBy" | "pen_setPenColorParamTo" => {
-            let parameter = owned_input(
+            let parameter = pen_color_parameter_input(
                 target,
                 block.inputs.get("COLOR_PARAM"),
                 variables,
                 lists,
                 arguments,
-            );
-            line(
-                output,
-                indent,
-                &format!("let scratch_pen_parameter: ScratchValue = {parameter};"),
             );
             let value = expression(
                 target,
@@ -1338,7 +1333,7 @@ fn generate_resumable_statement(
                 output,
                 indent,
                 &format!(
-                    "state.set_pen_color_parameter(scratch_pen_parameter, scratch_to_number({value}), {});",
+                    "state.set_pen_color_parameter({parameter}, scratch_to_number({value}), {});",
                     block.opcode == "pen_changePenColorParamBy"
                 ),
             );
@@ -2318,6 +2313,50 @@ fn owned_input(
         );
         format!("({value}).into()")
     }
+}
+
+// lower fixed pen dropdowns to enum values so repeated blocks avoid string matching.
+fn pen_color_parameter_input(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+) -> String {
+    let static_value = match input.and_then(parse_input) {
+        None | Some(InputValue::Empty) => Some("color"),
+        Some(InputValue::String(value)) => value.as_str(),
+        Some(InputValue::BlockReference(id)) => match target.blocks.get(id) {
+            Some(block) if block.opcode == "pen_menu_colorParam" => {
+                field_value(block, "colorParam").and_then(Value::as_str)
+            }
+            _ => None,
+        },
+        Some(InputValue::Number(_))
+        | Some(InputValue::VariableReference(_))
+        | Some(InputValue::ListReference(_)) => None,
+    };
+
+    if let Some(value) = static_value {
+        let variant = match value {
+            "color" => "Color",
+            "saturation" => "Saturation",
+            "brightness" => "Brightness",
+            "transparency" => "Transparency",
+            _ => "Unsupported",
+        };
+        return format!("crate::runtime::PenColorParameter::{variant}");
+    }
+
+    let value = expression(
+        target,
+        input,
+        variables,
+        lists,
+        arguments,
+        &mut HashSet::new(),
+    );
+    format!("scratch_string({value})")
 }
 
 fn list_field(

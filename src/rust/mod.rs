@@ -78,7 +78,7 @@ mod tests {
             "state.pen_up();",
             "state.stamp();",
             "state.set_pen_rgb_color(scratch_pen_color);",
-            "state.set_pen_color_parameter(scratch_pen_parameter,",
+            "state.set_pen_color_parameter(crate::runtime::PenColorParameter::Color,",
             "state.set_pen_size(",
             "state.switch_costume_to(",
             "state.set_visible(true);",
@@ -93,10 +93,74 @@ mod tests {
         assert!(!output.contains("unsupported statement: pen_"));
         assert!(!output.contains("unsupported reporter: looks_costume"));
         for parameter in ["color", "saturation", "brightness", "transparency"] {
+            let variant = match parameter {
+                "color" => "Color",
+                "saturation" => "Saturation",
+                "brightness" => "Brightness",
+                "transparency" => "Transparency",
+                _ => unreachable!(),
+            };
             assert!(output.contains(&format!(
-                "let scratch_pen_parameter: ScratchValue = ({parameter:?}).into();"
+                "state.set_pen_color_parameter(crate::runtime::PenColorParameter::{variant},"
             )));
         }
+    }
+
+    #[test]
+    fn pen_smoke_loop_uses_enum_menu_values_in_its_hot_path() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/pen-smoke-test.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(
+            output.contains(
+                "state.set_pen_color_parameter(crate::runtime::PenColorParameter::Color,"
+            )
+        );
+        assert!(!output.contains("scratch_pen_parameter"));
+    }
+
+    #[test]
+    fn reporter_connected_pen_color_parameter_keeps_dynamic_conversion() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/pen-tests.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let mut project = parse_project(&json).unwrap();
+        let (variable_id, variable_name) = project
+            .targets
+            .iter()
+            .find(|target| target.is_stage)
+            .and_then(|stage| stage.variables.iter().next())
+            .map(|(id, variable)| (id.clone(), variable.name.clone()))
+            .unwrap();
+        let target = project
+            .targets
+            .iter_mut()
+            .find(|target| target.name == "Sprite1")
+            .unwrap();
+        target.blocks.insert(
+            "dynamic_pen_parameter".to_owned(),
+            ScratchBlock {
+                opcode: "data_variable".to_owned(),
+                fields: std::collections::HashMap::from([(
+                    "VARIABLE".to_owned(),
+                    json!([variable_name, variable_id]),
+                )]),
+                ..Default::default()
+            },
+        );
+        let pen_block = target
+            .blocks
+            .values_mut()
+            .find(|block| block.opcode == "pen_changePenColorParamBy")
+            .unwrap();
+        pen_block.inputs.insert(
+            "COLOR_PARAM".to_owned(),
+            json!([1, "dynamic_pen_parameter"]),
+        );
+
+        let output = generate(&project);
+        assert!(output.contains("state.set_pen_color_parameter(scratch_string(state.get_"));
     }
 
     #[test]
@@ -396,6 +460,28 @@ mod tests {
         ] {
             assert!(!output.contains(&format!("unsupported statement: {opcode}")));
         }
+    }
+
+    #[test]
+    fn motion_position_reporters_read_the_scheduled_instance() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/pen-smoke-test-two.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(
+            output.contains(
+                "state.position(state.current_instance()).map(|(x, _)| x).unwrap_or(0.0)"
+            )
+        );
+        assert!(
+            output.contains(
+                "state.position(state.current_instance()).map(|(_, y)| y).unwrap_or(0.0)"
+            )
+        );
     }
 
     #[test]

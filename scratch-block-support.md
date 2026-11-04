@@ -261,7 +261,7 @@ Monitor display support does not imply that a reporter can be used by a script o
 | Monitor | Live value source |
 |---|---|
 | `data_variable`, `data_listcontents` | Canonical variable or complete list state. Lists render only the visible row range. |
-| `motion_xposition`, `motion_yposition`, `motion_direction`, `looks_size` | Snapshot for the monitor's named sprite. These remain monitor-only reporter support. |
+| `motion_xposition`, `motion_yposition`, `motion_direction`, `looks_size` | Motion reporters read the scheduled sprite in scripts; monitors use the named sprite snapshot. |
 | `looks_backdropnumbername` | Selected Stage backdrop name or one-based number. |
 | `sensing_current`, `sensing_dayssince2000`, `sensing_mousex`, `sensing_mousey`, `sensing_mousedown` | Current runtime values, refreshed independently from script reporter evaluation. |
 | `sensing_timer` | Renderer clock, updated while the monitor is visible. |
