@@ -27,6 +27,8 @@ use super::{
     scripts::{generate_green_flag_functions, generate_scripts},
 };
 
+const EXTERNAL_LIST_DATA_THRESHOLD: usize = 32 * 1024;
+
 #[derive(Clone)]
 pub(super) struct VariableInfo {
     pub(super) slot: usize,
@@ -60,11 +62,31 @@ pub(super) struct ListInfo {
 }
 
 /// generate the module header, saved variable declarations, and target scripts.
+#[cfg(test)]
 pub fn generate(project: &ScratchProject) -> String {
     generate_with_options(project, false)
 }
 
+#[cfg(test)]
 pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> String {
+    generate_internal(project, fast_math, None).0
+}
+
+/// Generate a runtime module and, when its initial lists are large, a companion
+/// JSON payload that keeps those values out of Rust source literals.
+pub fn generate_with_list_data(
+    project: &ScratchProject,
+    fast_math: bool,
+    list_data_filename: &str,
+) -> (String, Option<Vec<u8>>) {
+    generate_internal(project, fast_math, Some(list_data_filename))
+}
+
+fn generate_internal(
+    project: &ScratchProject,
+    fast_math: bool,
+    list_data_filename: Option<&str>,
+) -> (String, Option<Vec<u8>>) {
     let variables = allocate_variables(project);
     let lists = allocate_lists(project);
     let uses_broadcasts = project.targets.iter().any(|target| {
@@ -231,7 +253,7 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
                 .any(|monitor| monitor.visible && monitor.id == *id)
         );
     }
-    let mut initial_lists = vec![String::new(); lists.len()];
+    let mut serialized_lists = vec![String::new(); lists.len()];
     let mut list_metadata = vec![String::new(); lists.len()];
     for (id, info) in &lists {
         let list = project
@@ -239,9 +261,8 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
             .get(info.target_index)
             .and_then(|target| target.lists.get(id))
             .expect("every allocated list has saved contents");
-        let serialized_items = serde_json::to_string(&list.items)
+        serialized_lists[info.slot] = serde_json::to_string(&list.items)
             .expect("Scratch list values can be serialized as JSON");
-        initial_lists[info.slot] = format!("ScratchList::from_json({})", quote(&serialized_items));
         list_metadata[info.slot] = format!(
             "ScratchListMetadata::for_target({}, {}, {}, {}, {})",
             quote(id),
@@ -250,6 +271,37 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
             info.target_index,
             info.is_stage
         );
+    }
+
+    let total_list_data_bytes = serialized_lists.iter().map(String::len).sum::<usize>();
+    let use_external_list_data =
+        list_data_filename.is_some() && total_list_data_bytes >= EXTERNAL_LIST_DATA_THRESHOLD;
+    let mut external_list_data = use_external_list_data.then(Vec::new);
+    let mut initial_lists = vec![String::new(); lists.len()];
+    if use_external_list_data {
+        let filename = list_data_filename.expect("external list data requires a filename");
+        line(
+            &mut output,
+            1,
+            &format!(
+                "let initial_list_data: &[u8] = include_bytes!({});",
+                quote(filename)
+            ),
+        );
+        for (slot, serialized_items) in serialized_lists.iter().enumerate() {
+            let bytes = external_list_data
+                .as_mut()
+                .expect("external list data was allocated");
+            let start = bytes.len();
+            bytes.extend_from_slice(serialized_items.as_bytes());
+            let end = bytes.len();
+            initial_lists[slot] =
+                format!("ScratchList::from_json_bytes(&initial_list_data[{start}..{end}])");
+        }
+    } else {
+        for (slot, serialized_items) in serialized_lists.iter().enumerate() {
+            initial_lists[slot] = format!("ScratchList::from_json({})", quote(serialized_items));
+        }
     }
     line(
         &mut output,
@@ -507,7 +559,10 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     } else {
         ""
     };
-    format!("{imports}{print_value_macro}{output}")
+    (
+        format!("{imports}{print_value_macro}{output}"),
+        external_list_data,
+    )
 }
 
 fn runtime_imports(identifiers: &HashSet<String>) -> String {

@@ -18,13 +18,15 @@ mod project;
 mod scripts;
 mod statements;
 
+pub use project::generate_with_list_data;
+#[cfg(test)]
 pub use project::{generate, generate_with_options};
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::generate;
+    use super::{generate, generate_with_list_data};
     use crate::parser::{ScratchBlock, parse_project};
 
     #[test]
@@ -55,14 +57,33 @@ mod tests {
         assert!(list.items[100_000].is_number());
         assert!(list.items[199_999].is_number());
 
-        let output = generate(&project);
+        let (output, list_data) = generate_with_list_data(&project, false, "large.rs.lists.json");
         let serialized_items = serde_json::to_string(&list.items).unwrap();
-        assert!(output.contains(&format!("ScratchList::from_json({serialized_items:?})")));
+        assert!(output.contains("include_bytes!(\"large.rs.lists.json\")"));
+        assert!(output.contains("ScratchList::from_json_bytes(&initial_list_data["));
+        let list_data = list_data.expect("large list data should be externalized");
+        assert!(
+            list_data
+                .windows(serialized_items.len())
+                .any(|window| window == serialized_items.as_bytes())
+        );
         assert!(
             output.len() < 2_000_000,
             "generated module was {} bytes",
             output.len()
         );
+    }
+
+    #[test]
+    fn small_list_fixture_keeps_inline_initializers() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/lists.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let (output, list_data) = generate_with_list_data(&project, false, "lists.rs.lists.json");
+
+        assert!(list_data.is_none());
+        assert!(!output.contains("include_bytes!("));
+        assert!(output.contains("ScratchList::from_json("));
     }
 
     #[test]

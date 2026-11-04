@@ -83,11 +83,10 @@ fn compile_runtime_module(
 ) -> Result<(), Box<dyn Error>> {
     let json = extractor::read_project_json(input)?;
     let project = parser::parse_project(&json)?;
-    let generated = if fast_math {
-        rust::generate_with_options(&project, true)
-    } else {
-        rust::generate(&project)
-    };
+    let output_path = Path::new(output);
+    let (list_data_path, list_data_filename) = list_data_path(output_path)?;
+    let (generated, list_data) =
+        rust::generate_with_list_data(&project, fast_math, &list_data_filename);
     let mode_comment = if fast_math {
         "// fast math enabled; scratch edge-case compatibility is relaxed.\n"
     } else {
@@ -98,7 +97,8 @@ fn compile_runtime_module(
         Path::new(input).display(),
         generated
     );
-    write_if_changed(output, module.as_bytes())?;
+    write_optional_file(&list_data_path, list_data.as_deref())?;
+    write_if_changed(output_path, module.as_bytes())?;
     if fast_math {
         println!("Generated fast-math runtime module {output} from {input}");
     } else {
@@ -107,7 +107,7 @@ fn compile_runtime_module(
     Ok(())
 }
 
-fn write_if_changed(output: &str, contents: &[u8]) -> Result<(), std::io::Error> {
+fn write_if_changed(output: &Path, contents: &[u8]) -> Result<(), std::io::Error> {
     match fs::read(output) {
         Ok(existing) if existing == contents => return Ok(()),
         Ok(_) => {}
@@ -115,6 +115,27 @@ fn write_if_changed(output: &str, contents: &[u8]) -> Result<(), std::io::Error>
         Err(error) => return Err(error),
     }
     fs::write(output, contents)
+}
+
+fn write_optional_file(path: &Path, contents: Option<&[u8]>) -> Result<(), std::io::Error> {
+    if let Some(contents) = contents {
+        return write_if_changed(path, contents);
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn list_data_path(output: &Path) -> Result<(PathBuf, String), Box<dyn Error>> {
+    let mut filename = output
+        .file_name()
+        .ok_or("runtime output path must include a filename")?
+        .to_os_string();
+    filename.push(".lists.json");
+    let include_filename = filename.to_string_lossy().into_owned();
+    Ok((output.with_file_name(filename), include_filename))
 }
 
 fn compile_tests(fast_math: bool) -> Result<(), Box<dyn Error>> {
@@ -142,11 +163,10 @@ fn compile_tests(fast_math: bool) -> Result<(), Box<dyn Error>> {
             .ok_or("test project has no filename")?
             .to_string_lossy();
         let output = output_dir.join(format!("{output_name}.rs"));
-        let generated = if fast_math {
-            rust::generate_with_options(&project, true)
-        } else {
-            rust::generate(&project)
-        };
+        let (list_data_path, list_data_filename) = list_data_path(&output)?;
+        let (generated, list_data) =
+            rust::generate_with_list_data(&project, fast_math, &list_data_filename);
+        write_optional_file(&list_data_path, list_data.as_deref())?;
         fs::write(&output, generated)?;
         println!("Compiled {} -> {}", input.display(), output.display());
     }
