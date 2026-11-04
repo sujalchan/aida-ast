@@ -190,6 +190,11 @@ fn block_expression(
         "data_itemoflist" => list_field(block, "LIST", lists)
             .map(|list| format!("state.list({}).get({})", list.slot, input("INDEX", active)))
             .unwrap_or_else(|| unsupported_expression("missing list reference")),
+        // forward dropdown selectors unchanged; list operations resolve them when used.
+        "data_listindexall" | "data_listindexrandom" => field_value(block, "INDEX")
+            .and_then(Value::as_str)
+            .map(quote)
+            .unwrap_or_else(|| quote("1")),
         "data_lengthoflist" => list_field(block, "LIST", lists)
             .map(|list| format!("state.list({}).length() as f64", list.slot))
             .unwrap_or_else(|| unsupported_expression("missing list reference")),
@@ -1025,6 +1030,62 @@ mod tests {
                 comparison.contains(expected),
                 "{sensor} missing in {comparison}"
             );
+        }
+    }
+
+    // preserve every selector choice and scratch's default before a list consumer interprets it.
+    #[test]
+    fn list_index_dropdowns_keep_scratch_values_and_default_to_one() {
+        let cases = [
+            ("data_listindexall", "1", "1"),
+            ("data_listindexall", "last", "last"),
+            ("data_listindexall", "all", "all"),
+            ("data_listindexrandom", "1", "1"),
+            ("data_listindexrandom", "last", "last"),
+            ("data_listindexrandom", "random", "random"),
+        ];
+
+        for (opcode, selected, expected) in cases {
+            let target: ScratchTarget = serde_json::from_value(json!({
+                "name": "Stage",
+                "isStage": true,
+                "blocks": {
+                    "selector": {
+                        "opcode": opcode,
+                        "fields": { "INDEX": [selected, null] }
+                    }
+                }
+            }))
+            .unwrap();
+            let generated = expression(
+                &target,
+                Some(&json!([3, "selector"])),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut HashSet::new(),
+            );
+
+            assert_eq!(generated, format!("{expected:?}"), "{opcode}: {selected}");
+        }
+
+        for opcode in ["data_listindexall", "data_listindexrandom"] {
+            let target: ScratchTarget = serde_json::from_value(json!({
+                "name": "Stage",
+                "isStage": true,
+                "blocks": { "selector": { "opcode": opcode } }
+            }))
+            .unwrap();
+            let generated = expression(
+                &target,
+                Some(&json!([3, "selector"])),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut HashSet::new(),
+            );
+
+            assert_eq!(generated, "\"1\"");
         }
     }
 }

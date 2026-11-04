@@ -174,6 +174,40 @@ mod tests {
         assert!(output.contains("ScratchVariableMetadata::for_target(\"`jEk@4|i[#Fk?(8x)AV.-my variable\", \"my variable\", \"Stage\", 0, true)"));
     }
 
+    // exercise selector strings through list mutation and reporter code generation.
+    #[test]
+    fn list_index_dropdowns_flow_into_list_mutations_and_item_reporters() {
+        let project = parse_project(
+            r#"{
+                "targets": [{
+                    "name": "Stage",
+                    "isStage": true,
+                    "lists": { "list-id": ["items", ["a", "b"]] },
+                    "blocks": {
+                        "hat": { "opcode": "event_whenflagclicked", "next": "delete", "topLevel": true },
+                        "delete": { "opcode": "data_deleteoflist", "next": "insert", "parent": "hat", "fields": { "LIST": ["items", "list-id"] }, "inputs": { "INDEX": [3, "all", [10, ""]] } },
+                        "all": { "opcode": "data_listindexall", "shadow": true, "fields": { "INDEX": ["all", null] } },
+                        "insert": { "opcode": "data_insertatlist", "next": "replace", "parent": "delete", "fields": { "LIST": ["items", "list-id"] }, "inputs": { "ITEM": [1, [10, "x"]], "INDEX": [3, "random", [10, ""]] } },
+                        "random": { "opcode": "data_listindexrandom", "shadow": true, "fields": { "INDEX": ["random", null] } },
+                        "replace": { "opcode": "data_replaceitemoflist", "next": "say", "parent": "insert", "fields": { "LIST": ["items", "list-id"] }, "inputs": { "INDEX": [3, "last", [10, ""]], "ITEM": [1, [10, "y"]] } },
+                        "last": { "opcode": "data_listindexall", "shadow": true, "fields": { "INDEX": ["last", null] } },
+                        "say": { "opcode": "looks_say", "parent": "replace", "inputs": { "MESSAGE": [3, "item", [10, ""]] } },
+                        "item": { "opcode": "data_itemoflist", "parent": "say", "fields": { "LIST": ["items", "list-id"] }, "inputs": { "INDEX": [3, "get_index", [10, ""]] } },
+                        "get_index": { "opcode": "data_listindexrandom", "shadow": true, "fields": { "INDEX": ["last", null] } }
+                    }
+                }]
+            }"#,
+        )
+        .unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("let scratch_list_index: ScratchValue = (\"all\").into();"));
+        assert!(output.contains("let scratch_list_index: ScratchValue = (\"random\").into();"));
+        assert!(output.contains("let scratch_list_index: ScratchValue = (\"last\").into();"));
+        assert!(output.contains("state.list(0).get(\"last\")"));
+        assert!(!output.contains("unsupported reporter: data_listindex"));
+    }
+
     #[test]
     fn broadcast_fixture_resolves_message_ids_and_emits_restartable_receiver_hats() {
         let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/broadcast-test.sb3");
