@@ -1888,6 +1888,29 @@ fn generate_resumable_statement(
                 &format!("state.set_direction(scratch_to_number({direction}));"),
             );
         }
+        // apply turns to the scheduled instance and let runtime direction handling normalize the angle.
+        "motion_turnright" | "motion_turnleft" => {
+            let degrees = expression(
+                target,
+                block.inputs.get("DEGREES"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            let operator = if block.opcode == "motion_turnright" {
+                "+"
+            } else {
+                "-"
+            };
+            line(
+                output,
+                indent,
+                &format!(
+                    "state.set_direction(state.direction() {operator} scratch_to_number({degrees}));"
+                ),
+            );
+        }
         "motion_pointtowards" => {
             let random_target =
                 block

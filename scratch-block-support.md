@@ -7,14 +7,14 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 ## Status key
 
 - **✓**: AIDA generates Scratch-specific AIDA text, or the Rust backend implements the block's runtime behavior.
-- **-**: AIDA renders the block, but it is structural data, only works as a parent block input, or is supported only as a project monitor. This includes procedure definition blocks, click hats, greater-than sensor hats, and motion/size reporters currently exposed as monitors rather than script inputs.
+- **-**: AIDA renders the block, but it is structural data, only works as a parent block input, or is supported only as a project monitor. This includes procedure definition blocks, click hats, greater-than sensor hats, and the `looks_size` reporter currently exposed as a monitor rather than a script input.
 - **x**: the Rust runtime backend has no implementation; generated code reaches an unsupported-block placeholder if the block executes.
 
 `AIDA text output` describes the text translator, not execution. Runtime marks describe code paths in [`src/rust/expressions.rs`](src/rust/expressions.rs), [`src/rust/statements.rs`](src/rust/statements.rs), and [`src/rust/scripts.rs`](src/rust/scripts.rs); they do not promise parity for every Scratch edge case.
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **170 Scratch block cases + 4 procedure opcodes** | **110 implemented ✓, 18 partial -, 46 not implemented x** |
+| **Catalog** | **170 Scratch block cases + 4 procedure opcodes** | **115 implemented ✓, 15 partial -, 44 not implemented x** |
 
 ### Control
 
@@ -115,7 +115,7 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 | `motion_align_scene` | ✓ | x |
 | `motion_changexby` | ✓ | ✓ |
 | `motion_changeyby` | ✓ | ✓ |
-| `motion_direction` | ✓ | - |
+| `motion_direction` | ✓ | ✓ |
 | `motion_glidesecstoxy` | ✓ | ✓ |
 | `motion_glideto` | ✓ | ✓ |
 | `motion_goto` | ✓ | ✓ |
@@ -129,11 +129,11 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 | `motion_setrotationstyle` | ✓ | x |
 | `motion_setx` | ✓ | ✓ |
 | `motion_sety` | ✓ | ✓ |
-| `motion_turnleft` | ✓ | x |
-| `motion_turnright` | ✓ | x |
-| `motion_xposition` | ✓ | - |
+| `motion_turnleft` | ✓ | ✓ |
+| `motion_turnright` | ✓ | ✓ |
+| `motion_xposition` | ✓ | ✓ |
 | `motion_xscroll` | ✓ | x |
-| `motion_yposition` | ✓ | - |
+| `motion_yposition` | ✓ | ✓ |
 | `motion_yscroll` | ✓ | x |
 
 ### Operators

@@ -485,6 +485,31 @@ mod tests {
     }
 
     #[test]
+    fn position_direction_clone_fixture_lowers_turns_and_direction_reporter() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/position-direction-clone.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(
+            output
+                .contains("state.set_direction(state.direction() + scratch_to_number(15.0_f64));")
+        );
+        assert!(
+            output
+                .contains("state.set_direction(state.direction() - scratch_to_number(15.0_f64));")
+        );
+        assert!(output.contains("scratch_string(state.direction())"));
+        for opcode in ["motion_turnright", "motion_turnleft", "motion_direction"] {
+            assert!(!output.contains(&format!("unsupported statement: {opcode}")));
+            assert!(!output.contains(&format!("unsupported reporter: {opcode}")));
+        }
+    }
+
+    #[test]
     fn say_think_fixture_generates_bubbles_and_timed_waits() {
         let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/say-think.sb3");
         let json = crate::extractor::read_project_json(input).unwrap();

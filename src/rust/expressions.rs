@@ -188,6 +188,8 @@ fn block_expression(
         "motion_yposition" => {
             "state.position(state.current_instance()).map(|(_, y)| y).unwrap_or(0.0)".to_owned()
         }
+        // report the direction stored for the currently scheduled sprite or clone.
+        "motion_direction" => "state.direction()".to_owned(),
         "looks_costume" => field_value(block, "COSTUME")
             .map(text_literal)
             .unwrap_or_else(|| unsupported_expression("missing costume menu value")),
