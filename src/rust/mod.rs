@@ -363,7 +363,8 @@ mod tests {
         assert!(output.contains("fn new_backdrop_scripts(backdrop: &str, state: &ScratchState)"));
         assert!(output.contains("\"backdrop1\" => { for instance in state.instances_for_target("));
         assert!(output.contains("backdrop_receiver_script_stage_"));
-        assert!(output.contains("if state.redraw_requested() { return ScriptStatus::Yield; }"));
+        // redraw stops another scheduler round but does not interrupt the current script turn.
+        assert!(!output.contains("if state.redraw_requested() { return ScriptStatus::Yield; }"));
     }
 
     #[test]

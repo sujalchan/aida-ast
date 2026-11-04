@@ -546,6 +546,7 @@ fn generate_resumable_block(
                 output,
                 indent + 1,
             );
+            // redraw ends the scheduler round after runnable scripts finish their turn.
             line(
                 output,
                 indent + 1,
@@ -553,11 +554,6 @@ fn generate_resumable_block(
                     "script.frames.last_mut().unwrap().pc = {};",
                     pc_literal(next_pc)
                 ),
-            );
-            line(
-                output,
-                indent + 1,
-                "if state.redraw_requested() { return ScriptStatus::Yield; }",
             );
             line(output, indent + 1, "continue;");
         }
