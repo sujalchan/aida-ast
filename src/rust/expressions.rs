@@ -901,12 +901,10 @@ fn random_expression(
     arguments: &HashMap<String, String>,
     active: &mut HashSet<String>,
 ) -> String {
-    let from = constant_random_bound(target, block.inputs.get("FROM"));
-    let to = constant_random_bound(target, block.inputs.get("TO"));
-    if let (Some((from, from_integer)), Some((to, to_integer))) = (from, to) {
+    if let Some((from, to, integer_bounds)) = constant_random_bounds(target, block) {
         return format!(
             "scratch_random_constant({from:?}_f64, {to:?}_f64, {})",
-            from_integer && to_integer
+            integer_bounds
         );
     }
     format!(
@@ -928,6 +926,18 @@ fn random_expression(
             active,
         )
     )
+}
+
+pub(super) fn constant_random_bounds(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+) -> Option<(f64, f64, bool)> {
+    if block.opcode != "operator_random" {
+        return None;
+    }
+    let (from, from_integer) = constant_random_bound(target, block.inputs.get("FROM"))?;
+    let (to, to_integer) = constant_random_bound(target, block.inputs.get("TO"))?;
+    Some((from, to, from_integer && to_integer))
 }
 
 fn constant_random_bound(target: &ScratchTarget, input: Option<&Value>) -> Option<(f64, bool)> {

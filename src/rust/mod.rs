@@ -321,7 +321,9 @@ mod tests {
         let project = parse_project(&json).unwrap();
         let output = generate(&project);
 
-        assert!(output.contains("add_generated(repeat_chunk"));
+        assert!(output.contains("add_generated_numbers(repeat_chunk"));
+        assert!(output.contains("with_scratch_random(|scratch_random|"));
+        assert!(output.contains("between_with_integer_bounds(11.0_f64, 20.0_f64, true)"));
         assert!(output.contains("scratch_random_constant(11.0_f64, 20.0_f64, true)"));
         assert!(output.contains("script.warp_budget.expired_now(clock)"));
         assert!(output.contains("repeat_counts[0] = repeat_remaining"));

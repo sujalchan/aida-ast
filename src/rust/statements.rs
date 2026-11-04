@@ -26,7 +26,8 @@ use crate::parser::{InputValue, ScratchBlock, ScratchTarget, parse_input};
 use super::{
     expressions::{
         LocalValueKind, boolean_input, collect_numeric_local_slots, constant_numeric_input,
-        expression, expression_argument, local_expression, local_to_bool, local_to_number,
+        constant_random_bounds, expression, expression_argument, local_expression, local_to_bool,
+        local_to_number,
     },
     literals::{field_value, line, quote},
     project::{ListInfo, VariableInfo},
@@ -763,6 +764,17 @@ fn generate_warp_repeat_list_append(
     };
     let item = owned_input(target, body.inputs.get("ITEM"), variables, lists, arguments);
     let item_reads_state = item.contains("state.");
+    let numeric_random =
+        body.inputs
+            .get("ITEM")
+            .and_then(parse_input)
+            .and_then(|input| match input {
+                InputValue::BlockReference(id) => target
+                    .blocks
+                    .get(id)
+                    .and_then(|block| constant_random_bounds(target, block)),
+                _ => None,
+            });
 
     line(
         output,
@@ -807,6 +819,15 @@ fn generate_warp_repeat_list_append(
             ),
         );
         line(output, indent + 3, "}");
+    } else if let Some((from, to, integer_bounds)) = numeric_random {
+        line(
+            output,
+            indent + 3,
+            &format!(
+                "scratch_list_changed = with_scratch_random(|scratch_random| state.list_mut({}).add_generated_numbers(repeat_chunk, || scratch_random.between_with_integer_bounds({from:?}_f64, {to:?}_f64, {integer_bounds})));",
+                list.slot
+            ),
+        );
     } else {
         line(
             output,

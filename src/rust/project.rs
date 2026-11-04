@@ -541,6 +541,7 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         "scratch_or",
         "scratch_random",
         "scratch_random_constant",
+        "with_scratch_random",
         "scratch_round",
         "scratch_sin",
         "scratch_string",
