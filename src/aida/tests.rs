@@ -542,6 +542,218 @@ fn all_listed_blocks_render_their_expected_source() {
 }
 
 #[test]
+fn scratch_block_support_inventory_is_complete_and_counts_match() {
+    let mut expected = include_str!("block_cases.tsv")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .map(|line| line.split('\t').next().unwrap().to_owned())
+        .collect::<HashSet<_>>();
+    for opcode in [
+        "procedures_call",
+        "procedures_declaration",
+        "procedures_definition",
+        "procedures_prototype",
+    ] {
+        expected.insert(opcode.to_owned());
+    }
+
+    let editor_helpers = [
+        "control_create_clone_of_menu",
+        "data_listindexall",
+        "data_listindexrandom",
+        "event_broadcast_menu",
+        "event_touchingobjectmenu",
+        "looks_backdrops",
+        "looks_costume",
+        "motion_glideto_menu",
+        "motion_goto_menu",
+        "motion_pointtowards_menu",
+        "sensing_distancetomenu",
+        "sensing_keyoptions",
+        "sensing_of_object_menu",
+        "sensing_touchingobjectmenu",
+        "sound_sounds_menu",
+        "pen_menu_colorParam",
+        "colour_picker",
+        "math_angle",
+        "math_integer",
+        "math_number",
+        "math_positive_number",
+        "math_whole_number",
+        "matrix",
+        "note",
+        "text",
+        "argument_editor_boolean",
+        "argument_editor_string_number",
+        "procedures_declaration",
+        "procedures_definition",
+        "procedures_prototype",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<HashSet<_>>();
+    let legacy_noops = [
+        "looks_hideallsprites",
+        "looks_changestretchby",
+        "looks_setstretchto",
+        "motion_scroll_right",
+        "motion_scroll_up",
+        "motion_align_scene",
+        "motion_xscroll",
+        "motion_yscroll",
+        "sensing_userid",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<HashSet<_>>();
+    let legacy_executable = [
+        "control_all_at_once",
+        "control_clear_counter",
+        "control_get_counter",
+        "control_incr_counter",
+        "control_for_each",
+        "control_while",
+        "event_whentouchingobject",
+        "sensing_loud",
+        "pen_changePenHueBy",
+        "pen_changePenShadeBy",
+        "pen_setPenHueToNumber",
+        "pen_setPenShadeToNumber",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<HashSet<_>>();
+    let extension_examples = expected
+        .iter()
+        .filter(|opcode| opcode.starts_with("extension_"))
+        .cloned()
+        .collect::<HashSet<_>>();
+
+    let support = include_str!("../../scratch-block-support.md");
+    let mut section = String::new();
+    let mut rows = Vec::new();
+    for line in support.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            section = heading.to_owned();
+        }
+        let Some(first_cell) = line.split('|').nth(1).map(str::trim) else {
+            continue;
+        };
+        let Some(opcode) = first_cell
+            .strip_prefix('`')
+            .and_then(|cell| cell.strip_suffix('`'))
+            .filter(|cell| !cell.contains('`'))
+        else {
+            continue;
+        };
+        if !matches!(
+            section.as_str(),
+            "Current Scratch 3 runtime opcodes"
+                | "Editor and serialized input helpers"
+                | "Legacy compatibility"
+                | "Legacy executable compatibility"
+                | "AIDA extension examples"
+        ) {
+            continue;
+        }
+        let cells = line.split('|').map(str::trim).collect::<Vec<_>>();
+        rows.push((
+            section.clone(),
+            opcode.to_owned(),
+            cells.get(2).copied().unwrap_or_default().to_owned(),
+            cells.get(3).copied().unwrap_or_default().to_owned(),
+        ));
+    }
+
+    let mut occurrences = HashMap::<String, usize>::new();
+    for (_, opcode, _, _) in &rows {
+        *occurrences.entry(opcode.clone()).or_default() += 1;
+    }
+    let duplicates = occurrences
+        .iter()
+        .filter(|(_, count)| **count != 1)
+        .map(|(opcode, count)| (opcode.clone(), *count))
+        .collect::<Vec<_>>();
+    assert!(
+        duplicates.is_empty(),
+        "each inventory opcode must appear in exactly one section: {duplicates:?}"
+    );
+    assert_eq!(
+        occurrences.keys().cloned().collect::<HashSet<_>>(),
+        expected,
+        "catalog sections must cover the tested opcodes and procedure records exactly"
+    );
+
+    let entries_for = |heading: &str| {
+        rows.iter()
+            .filter(|(entry_section, _, _, _)| entry_section == heading)
+            .collect::<Vec<_>>()
+    };
+    let current = entries_for("Current Scratch 3 runtime opcodes");
+    let helpers = entries_for("Editor and serialized input helpers");
+    let noops = entries_for("Legacy compatibility");
+    let legacy = entries_for("Legacy executable compatibility");
+    let examples = entries_for("AIDA extension examples");
+
+    let expected_current = expected
+        .difference(&editor_helpers)
+        .filter(|opcode| !legacy_noops.contains(*opcode))
+        .filter(|opcode| !legacy_executable.contains(*opcode))
+        .filter(|opcode| !extension_examples.contains(*opcode))
+        .cloned()
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        current
+            .iter()
+            .map(|(_, opcode, _, _)| opcode.clone())
+            .collect::<HashSet<_>>(),
+        expected_current,
+        "serialized helpers and compatibility entries must not count as current runtime opcodes"
+    );
+    for (entries, expected_set, heading) in [
+        (&helpers, &editor_helpers, "editor and serialized helpers"),
+        (&noops, &legacy_noops, "legacy no-ops"),
+        (&legacy, &legacy_executable, "legacy executable blocks"),
+        (&examples, &extension_examples, "AIDA extension examples"),
+    ] {
+        assert_eq!(
+            entries
+                .iter()
+                .map(|(_, opcode, _, _)| opcode.clone())
+                .collect::<HashSet<_>>(),
+            *expected_set,
+            "incorrect {heading} classification"
+        );
+    }
+    assert_eq!(extension_examples.len(), 10);
+    assert_eq!(current.len(), 134);
+    assert_eq!(helpers.len(), 30);
+    assert_eq!(noops.len(), 9);
+    assert_eq!(legacy.len(), 12);
+    assert_eq!(examples.len(), 10);
+
+    let implemented = current.iter().filter(|entry| entry.3 == "✓").count();
+    let partial = current.iter().filter(|entry| entry.3 == "-").count();
+    let unsupported = current.iter().filter(|entry| entry.3 == "x").count();
+    let generated_counts = format!(
+        "**Generated counts:** current runtime: {} ({} `✓`, {} `-`, {} `x`); editor and serialized helpers: {}; legacy no-ops: {}; legacy executable: {}; AIDA extension examples: {}; total classified identifiers: {}.",
+        current.len(),
+        implemented,
+        partial,
+        unsupported,
+        helpers.len(),
+        noops.len(),
+        legacy.len(),
+        examples.len(),
+        rows.len()
+    );
+    assert!(
+        support.lines().any(|line| line == generated_counts),
+        "inventory summary must match classified table rows: {generated_counts}"
+    );
+}
+
+#[test]
 fn reads_integer_json_values_and_nested_join_inside_arithmetic() {
     let json = json!({"targets":[{
         "name":"Stage", "isStage":true, "variables":{"v":["test 2",12]},

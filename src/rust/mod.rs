@@ -368,6 +368,52 @@ mod tests {
     }
 
     #[test]
+    fn legacy_vm_noops_keep_their_command_and_undefined_reporter_behavior() {
+        let project = parse_project(
+            &json!({
+                "targets": [{
+                    "name": "Sprite1", "isStage": false,
+                    "blocks": {
+                        "hat": {"opcode":"event_whenflagclicked", "next":"hide_all", "topLevel":true},
+                        "hide_all": {"opcode":"looks_hideallsprites", "next":"change_stretch", "parent":"hat"},
+                        "change_stretch": {"opcode":"looks_changestretchby", "next":"set_stretch", "parent":"hide_all"},
+                        "set_stretch": {"opcode":"looks_setstretchto", "next":"scroll_right", "parent":"change_stretch"},
+                        "scroll_right": {"opcode":"motion_scroll_right", "next":"scroll_up", "parent":"set_stretch"},
+                        "scroll_up": {"opcode":"motion_scroll_up", "next":"align_scene", "parent":"scroll_right"},
+                        "align_scene": {"opcode":"motion_align_scene", "next":"say_userid", "parent":"scroll_up"},
+                        "say_userid": {"opcode":"looks_say", "next":"say_xscroll", "parent":"align_scene", "inputs":{"MESSAGE":[2,"reporter_userid"]}},
+                        "reporter_userid": {"opcode":"sensing_userid", "parent":"say_userid"},
+                        "say_xscroll": {"opcode":"looks_say", "next":"say_yscroll", "parent":"say_userid", "inputs":{"MESSAGE":[2,"reporter_xscroll"]}},
+                        "reporter_xscroll": {"opcode":"motion_xscroll", "parent":"say_xscroll"},
+                        "say_yscroll": {"opcode":"looks_say", "parent":"say_xscroll", "inputs":{"MESSAGE":[2,"reporter_yscroll"]}},
+                        "reporter_yscroll": {"opcode":"motion_yscroll", "parent":"say_yscroll"}
+                    }
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let output = generate(&project);
+
+        assert_eq!(output.matches("let _ = ();\n").count(), 6);
+        assert_eq!(output.matches("ScratchValue::Undefined").count(), 3);
+        for opcode in [
+            "looks_hideallsprites",
+            "looks_changestretchby",
+            "looks_setstretchto",
+            "motion_scroll_right",
+            "motion_scroll_up",
+            "motion_align_scene",
+            "sensing_userid",
+            "motion_xscroll",
+            "motion_yscroll",
+        ] {
+            assert!(!output.contains(&format!("unsupported statement: {opcode}")));
+            assert!(!output.contains(&format!("unsupported reporter: {opcode}")));
+        }
+    }
+
+    #[test]
     fn stop_loop_fixture_lowers_this_script_inside_a_custom_block_and_stop_all() {
         let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/stop-loop-test.sb3");
         let json = crate::extractor::read_project_json(input).unwrap();

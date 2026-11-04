@@ -1270,6 +1270,13 @@ fn generate_resumable_statement(
     indent: usize,
 ) {
     match block.opcode.as_str() {
+        // scratch vm keeps these imported legacy commands as no-ops.
+        "looks_hideallsprites"
+        | "looks_changestretchby"
+        | "looks_setstretchto"
+        | "motion_scroll_right"
+        | "motion_scroll_up"
+        | "motion_align_scene" => line(output, indent, "let _ = ();"),
         "looks_show" => line(output, indent, "state.set_visible(true);"),
         "looks_hide" => line(output, indent, "state.set_visible(false);"),
         "looks_switchcostumeto" => {

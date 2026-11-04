@@ -262,6 +262,10 @@ fn block_expression(
         "sensing_online" => "false".to_owned(),
         "sensing_username" => "state.username()".to_owned(),
         "sensing_loudness" => "state.loudness()".to_owned(),
+        // legacy vm reporters have no primitive result, so preserve scratch's undefined value.
+        "motion_xscroll" | "motion_yscroll" | "sensing_userid" => {
+            "ScratchValue::Undefined".to_owned()
+        }
         "data_listcontainsitem" => list_field(block, "LIST", lists)
             .map(|list| {
                 format!(
