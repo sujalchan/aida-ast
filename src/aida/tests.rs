@@ -538,7 +538,7 @@ fn all_listed_blocks_render_their_expected_source() {
         assert_eq!(generate(&project), expected, "opcode: {opcode}");
     }
     // The other four concrete opcodes are the procedure fixtures below.
-    assert_eq!(seen.len(), 190);
+    assert_eq!(seen.len(), 191);
 }
 
 #[test]

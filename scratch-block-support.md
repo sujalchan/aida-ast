@@ -1,6 +1,6 @@
 # Scratch block support
 
-This is the opcode-level support snapshot for AIDA's Scratch 3 generator and runtime. It lists the 180 cases from [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv), four custom-procedure opcodes, and the Rust-only `sensing_online` reporter. Extension examples and third-party extensions are omitted.
+This is the opcode-level support snapshot for AIDA's Scratch 3 generator and runtime. It lists 181 standard Scratch block cases from [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv) and four custom-procedure opcodes. The TSV also contains extension examples used by generator tests; extension examples and third-party extensions are omitted from this catalog.
 
 The opcode inventory follows Scratch VM's standard block packages: [control](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_control.js), [data](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_data.js), [events](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_event.js), [looks](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_looks.js), [motion](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_motion.js), [operators](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_operators.js), [procedures](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_procedures.js), [sensing](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sensing.js), and [sound](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sound.js). AIDA's explicit text mappings are in [`src/aida/blocks.rs`](src/aida/blocks.rs); control-flow and procedure rendering is also implemented in [`src/aida.rs`](src/aida.rs) and [`src/aida/procedures.rs`](src/aida/procedures.rs).
 
@@ -14,7 +14,7 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **180 block cases + 4 procedure opcodes + 1 Rust-only opcode** | **90 implemented ✓, 31 partial -, 64 not implemented x** |
+| **Catalog** | **181 Scratch block cases + 4 procedure opcodes** | **91 implemented ✓, 31 partial -, 63 not implemented x** |
 
 ### Control
 
@@ -183,7 +183,7 @@ The opcode inventory follows Scratch VM's standard block packages: [control](htt
 | `sensing_mousedown` | ✓ | ✓ |
 | `sensing_mousex` | ✓ | ✓ |
 | `sensing_mousey` | ✓ | ✓ |
-| `sensing_online` | x | ✓ |
+| `sensing_online` | ✓ | ✓ |
 | `sensing_of` | ✓ | x |
 | `sensing_of_object_menu` | ✓ | - |
 | `sensing_resettimer` | ✓ | ✓ |

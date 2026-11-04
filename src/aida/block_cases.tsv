@@ -169,6 +169,7 @@ sensing_keyoptions	reporter	{}	{"KEY_OPTION":["key_option choice",null]}	"key_op
 sensing_mousedown	reporter	{}	{}	mouse_down()
 sensing_mousex	reporter	{}	{}	mouse_x()
 sensing_mousey	reporter	{}	{}	mouse_y()
+sensing_online	reporter	{}	{}	online()
 sensing_setdragmode	statement	{}	{"DRAG_MODE":["drag_mode choice",null]}	set_drag_mode "drag_mode choice"
 sensing_loudness	reporter	{}	{}	loudness()
 sensing_loud	reporter	{}	{}	loud()

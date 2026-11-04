@@ -204,6 +204,7 @@ pub fn rule(opcode: &str) -> Option<Rule> {
         "sensing_mousedown" => Reporter("mouse_down()"),
         "sensing_mousex" => Reporter("mouse_x()"),
         "sensing_mousey" => Reporter("mouse_y()"),
+        "sensing_online" => Reporter("online()"),
         "sensing_setdragmode" => Statement("set_drag_mode {@DRAG_MODE}"),
         "sensing_loudness" => Reporter("loudness()"),
         "sensing_loud" => Reporter("loud()"),
