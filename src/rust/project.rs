@@ -99,6 +99,28 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
             )
         })
     });
+    let uses_project_timer = project.targets.iter().any(|target| {
+        target.blocks.values().any(|block| {
+            matches!(
+                block.opcode.as_str(),
+                "sensing_timer" | "sensing_resettimer"
+            )
+        })
+    }) || project
+        .monitors
+        .iter()
+        .any(|monitor| monitor.opcode == "sensing_timer");
+    let has_visible_timer_monitor = project
+        .monitors
+        .iter()
+        .any(|monitor| monitor.opcode == "sensing_timer" && monitor.visible);
+    let has_live_sensing_monitors = project.monitors.iter().any(|monitor| {
+        monitor.visible
+            && matches!(
+                monitor.opcode.as_str(),
+                "sensing_current" | "sensing_dayssince2000"
+            )
+    });
     let expire_bubbles = if uses_timed_speech {
         "self.state.expire_speech_bubbles(self.scheduler.now_millis()); "
     } else {
@@ -145,24 +167,12 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
     for (id, info) in &lists {
         let list = project
             .targets
-            .iter()
-            .find(|target| target.name == info.target && target.is_stage == info.is_stage)
+            .get(info.target_index)
             .and_then(|target| target.lists.get(id))
-            .or_else(|| {
-                project
-                    .targets
-                    .iter()
-                    .find_map(|target| target.lists.get(id))
-            })
             .expect("every allocated list has saved contents");
-        initial_lists[info.slot] = format!(
-            "ScratchList::new(vec![{}])",
-            list.items
-                .iter()
-                .map(|item| format!("({}).into()", literal(item)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
+        let serialized_items = serde_json::to_string(&list.items)
+            .expect("Scratch list values can be serialized as JSON");
+        initial_lists[info.slot] = format!("ScratchList::from_json({})", quote(&serialized_items));
         list_metadata[info.slot] = format!(
             "ScratchListMetadata::for_target({}, {}, {}, {}, {})",
             quote(id),
@@ -192,6 +202,13 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
                 .join(", ")
         ),
     );
+    if has_visible_timer_monitor {
+        line(
+            &mut output,
+            1,
+            "state.set_project_timer_monitor_visible(true);",
+        );
+    }
 
     if let Some(stage) = project.targets.iter().find(|target| target.is_stage) {
         let names = stage
@@ -228,9 +245,20 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
                 target.x, target.y
             ),
         );
+        line(
+            &mut output,
+            1,
+            &format!(
+                "state.set_original_visual({target_index}, {}_f64, {}_f64, {});",
+                target.direction, target.size, target.visible
+            ),
+        );
     }
 
     output.push_str("let scripts = new_scripts();\nlet scheduler = match clock { Some(clock) => ScriptScheduler::with_clock(scripts, clock), None => ScriptScheduler::new(scripts) };\n");
+    if uses_project_timer {
+        output.push_str("state.reset_project_timer(scheduler.now_millis());\n");
+    }
     output.push_str("    Self { state, scheduler, frame_order: Vec::new() }\n    }\n\n");
     output.push_str(
         "    pub fn step(&mut self) -> bool { self.advance() == SchedulerStatus::Progressed }\n",
@@ -253,8 +281,13 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         output.push_str(&format!("    pub fn advance_frame(&mut self) -> SchedulerStatus {{ {expire_bubbles}self.scheduler.script_ids_in_frame_order_into(&mut self.frame_order); let mut cursor = 0; let mut progressed = false; while cursor < self.frame_order.len() {{ let id = self.frame_order[cursor]; cursor += 1; if let Some(status) = self.scheduler.advance_script_id(id, &mut self.state) {{ if status == SchedulerStatus::Complete {{ return status; }} progressed = true; }} }} if progressed {{ SchedulerStatus::Progressed }} else {{ self.scheduler.idle_status() }} }}\n"));
     }
     output.push_str("    pub fn duration_until(&self, deadline: u64) -> std::time::Duration { self.scheduler.duration_until(deadline) }\n");
-    output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }\n");
-    output.push_str("    pub fn stop_all(&mut self) { self.scheduler.stop_all(&mut self.state); }\n");
+    if uses_project_timer {
+        output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); self.state.reset_project_timer(self.scheduler.now_millis()); }\n");
+    } else {
+        output.push_str("    pub fn restart(&mut self) { self.state.remove_clones(); self.scheduler.restart(new_scripts()); }\n");
+    }
+    output
+        .push_str("    pub fn stop_all(&mut self) { self.scheduler.stop_all(&mut self.state); }\n");
     output.push_str(
         "    pub fn is_complete(&self) -> bool { self.scheduler.active_scripts() == 0 }\n",
     );
@@ -262,6 +295,11 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         "    pub fn active_script_count(&self) -> usize { self.scheduler.active_scripts() }\n",
     );
     output.push_str("    pub fn state(&self) -> &ScratchState { &self.state }\n");
+    output.push_str("    pub fn set_username(&mut self, username: String) { self.state.set_username(username); }\n");
+    output.push_str(&format!(
+        "    pub fn has_live_sensing_monitors(&self) -> bool {{ {has_live_sensing_monitors} }}\n"
+    ));
+    output.push_str("    pub fn set_target_fence_geometry(&mut self, target: usize, geometry: SpriteFenceGeometry) { self.state.set_target_fence_geometry(target, geometry); }\n");
     output.push_str("    pub fn begin_tick(&mut self) { self.state.begin_tick(); }\n");
     output
         .push_str("    pub fn redraw_requested(&self) -> bool { self.state.redraw_requested() }\n");
@@ -270,7 +308,29 @@ pub fn generate_with_options(project: &ScratchProject, fast_math: bool) -> Strin
         "    pub fn presentation_consumed(&mut self) { self.state.presentation_consumed(); }\n",
     );
     output.push_str("    pub fn apply_input(&mut self, event: RuntimeInputEvent) { if let Some(key) = self.state.apply_input(event) { let scripts = new_keypress_scripts(&key, &self.state); self.scheduler.add_scripts(scripts); } }\n");
-    output.push_str("    pub fn observable_snapshot(&self, tick: usize) -> RuntimeSnapshot { self.state.observable_snapshot(tick) }\n");
+    let monitor_reporters = reporter_monitor_values(project);
+    let snapshot_base = if uses_project_timer {
+        "self.state.observable_snapshot_with_timer(tick, self.scheduler.now_millis())"
+    } else {
+        "self.state.observable_snapshot(tick)"
+    };
+    output.push_str(&format!("    pub fn observable_snapshot(&self, tick: usize) -> RuntimeSnapshot {{ let mut snapshot = {snapshot_base};\n"));
+    if !monitor_reporters.is_empty() {
+        output.push_str("        snapshot.reporters = vec![\n");
+        for (key, expression) in monitor_reporters {
+            line(
+                &mut output,
+                3,
+                &format!(
+                    "ReporterSnapshot {{ key: {}.to_owned(), value: ({}).into() }},",
+                    quote(&key),
+                    expression
+                ),
+            );
+        }
+        output.push_str("        ];\n");
+    }
+    output.push_str("        snapshot }\n");
     output.push_str("    pub fn set_observable_event_sink(&mut self, sink: Option<std::sync::mpsc::Sender<ObservableEvent>>) { self.state.set_event_sink(sink); }\n");
     output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance_frame() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::Complete => break } } }\n}\n\n");
     output.push_str("#[allow(dead_code)]\npub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
@@ -327,9 +387,11 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         "ScratchList",
         "ScratchListMetadata",
         "ScratchState",
+        "SpriteFenceGeometry",
         "ScratchValue",
         "ScratchVariableMetadata",
         "RuntimeSnapshot",
+        "ReporterSnapshot",
         "RuntimeInputEvent",
         "SchedulerStatus",
         "ScriptScheduler",
@@ -342,6 +404,82 @@ fn runtime_imports(identifiers: &HashSet<String>) -> String {
         .filter(|name| identifiers.contains(*name))
         .collect::<Vec<_>>();
     format!("use crate::runtime::{{{}}};\n\n", used.join(", "))
+}
+
+fn reporter_monitor_values(project: &ScratchProject) -> Vec<(String, String)> {
+    project
+        .monitors
+        .iter()
+        .filter_map(|monitor| {
+            let expression = match monitor.opcode.as_str() {
+                "sensing_current" => {
+                    let method = match monitor
+                        .params
+                        .get("CURRENTMENU")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_ascii_uppercase()
+                        .as_str()
+                    {
+                        "YEAR" => "current_year",
+                        "MONTH" => "current_month",
+                        "DATE" => "current_date",
+                        "DAYOFWEEK" => "current_day_of_week",
+                        "HOUR" => "current_hour",
+                        "MINUTE" => "current_minute",
+                        "SECOND" => "current_second",
+                        _ => "",
+                    };
+                    if method.is_empty() {
+                        "0.0".to_owned()
+                    } else {
+                        format!("self.state.{method}()")
+                    }
+                }
+                "sensing_dayssince2000" => "self.state.days_since_2000()".to_owned(),
+                "sensing_online" => "false".to_owned(),
+                "sensing_username" => "self.state.username()".to_owned(),
+                "sensing_mousex" => "self.state.mouse_x()".to_owned(),
+                "sensing_mousey" => "self.state.mouse_y()".to_owned(),
+                "sensing_mousedown" => "self.state.mouse_down()".to_owned(),
+                "sensing_loudness" => "self.state.loudness()".to_owned(),
+                "sensing_keypressed" => {
+                    let key = monitor
+                        .params
+                        .get("KEY_OPTION")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
+                    format!("self.state.key_pressed({})", quote(key))
+                }
+                // these reporters have their own snapshot paths.
+                "data_variable"
+                | "data_listcontents"
+                | "sensing_timer"
+                | "motion_xposition"
+                | "motion_yposition"
+                | "motion_direction"
+                | "looks_size"
+                | "looks_backdropnumbername"
+                | "looks_costumenumbername" => return None,
+                _ => return None,
+            };
+            let target_name = project
+                .targets
+                .iter()
+                .find(|target| {
+                    monitor
+                        .sprite_name
+                        .as_deref()
+                        .map_or(target.is_stage, |sprite| target.name == sprite)
+                })
+                .map(|target| target.name.as_str());
+            let key = target_name.map_or_else(
+                || format!("__reporter/{}/{}", monitor.opcode, monitor.id),
+                |target| format!("__reporter/{target}/{}/{}", monitor.opcode, monitor.id),
+            );
+            Some((key, expression))
+        })
+        .collect()
 }
 
 fn rust_identifiers(source: &str) -> HashSet<String> {

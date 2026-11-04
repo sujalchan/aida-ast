@@ -1,24 +1,20 @@
 # Scratch block support
 
-This is a snapshot of AIDA's Scratch 3 block support. The table lists 180 core, editor-menu, literal, legacy, and Pen opcodes from [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv), plus the four custom-procedure opcodes covered by procedure tests. It intentionally omits the extension-example opcodes and does not list third-party extensions.
+This is the opcode-level support snapshot for AIDA's Scratch 3 generator and runtime. It lists the 180 cases from [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv), four custom-procedure opcodes, and the Rust-only `sensing_online` reporter. Extension examples and third-party extensions are omitted.
 
 The opcode inventory follows Scratch VM's standard block packages: [control](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_control.js), [data](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_data.js), [events](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_event.js), [looks](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_looks.js), [motion](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_motion.js), [operators](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_operators.js), [procedures](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_procedures.js), [sensing](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sensing.js), and [sound](https://github.com/scratchfoundation/scratch-vm/blob/develop/src/blocks/scratch3_sound.js). AIDA's explicit text mappings are in [`src/aida/blocks.rs`](src/aida/blocks.rs); control-flow and procedure rendering is also implemented in [`src/aida.rs`](src/aida.rs) and [`src/aida/procedures.rs`](src/aida/procedures.rs).
 
 ## Status key
 
 - **✓**: AIDA generates Scratch-specific AIDA text, or the Rust backend implements the block's runtime behavior.
-- **-**: AIDA renders the block, but it is structural/menu data, only works as a parent block input, or is only supported through a project monitor. This includes procedure definition blocks, menu shadows, click hats, greater-than sensor hats, and motion/size reporters currently exposed as monitors rather than script inputs.
+- **-**: AIDA renders the block, but it is structural/menu data, only works as a parent block input, or is supported only as a project monitor. This includes procedure definition blocks, menu shadows, click hats, greater-than sensor hats, and motion/size reporters currently exposed as monitors rather than script inputs.
 - **x**: the Rust runtime backend has no implementation; generated code reaches an unsupported-block placeholder if the block executes.
 
-`AIDA text output` is a translation format, not an execution engine. A check in that column means the block has a text representation; it does not imply Scratch VM-equivalent runtime behavior. Runtime status is based on the generated Rust implementation in [`src/rust/expressions.rs`](src/rust/expressions.rs), [`src/rust/statements.rs`](src/rust/statements.rs), and [`src/rust/scripts.rs`](src/rust/scripts.rs). These marks describe implemented code paths, not a guarantee of parity for every Scratch edge case.
-
-Broadcast support includes `event_broadcast`, `event_broadcastandwait`, and `event_whenbroadcastreceived`. The scheduler starts matching receivers, restarts an already active receiver when the same message is sent again, and waits for the started receiver runs for broadcast-and-wait. Matching receivers are created for live clones too; deleting a clone removes its scripts and releases senders waiting for them. The `broadcast-test.sb3` fixture exercises these paths, including a receiver that calls a waiting custom block. Keyboard hats and key/mouse reporters work in graphical mode. Backdrop-switch hats run when a different backdrop is selected. Click hats and greater-than sensor hats remain partial because AIDA does not yet generate those event sources.
-
-Project monitors preserve their target ownership and reporter parameters when AIDA builds the renderer's value keys. Sprite-owned reporters are labeled with their owning sprite name; Stage backdrop number/name monitors read the selected Stage backdrop. Motion x/y/direction and Looks size monitors use the matching original sprite's runtime snapshot, so motion changes (including glide updates) refresh the displayed value. The renderer only marks a monitor dirty when its displayed value changes. This monitor support does not imply that the reporter opcode is available as a script input. Generic reporter monitors without a runtime-published value still show their project-provided initial value.
+`AIDA text output` describes the text translator, not execution. Runtime marks describe code paths in [`src/rust/expressions.rs`](src/rust/expressions.rs), [`src/rust/statements.rs`](src/rust/statements.rs), and [`src/rust/scripts.rs`](src/rust/scripts.rs); they do not promise parity for every Scratch edge case.
 
 | Scratch opcode | AIDA text output | Rust runtime |
 |---|:---:|:---:|
-| **Catalog** | **180 block cases + 4 procedure opcodes** | **82 implemented ✓, 31 partial -, 71 not implemented x** |
+| **Catalog** | **180 block cases + 4 procedure opcodes + 1 Rust-only opcode** | **90 implemented ✓, 31 partial -, 64 not implemented x** |
 
 ### Control
 
@@ -52,7 +48,7 @@ Project monitors preserve their target ownership and reporter parameters when AI
 | `data_deletealloflist` | ✓ | ✓ |
 | `data_deleteoflist` | ✓ | ✓ |
 | `data_hidelist` | ✓ | ✓ |
-| `data_hidevariable` | ✓ | x |
+| `data_hidevariable` | ✓ | ✓ |
 | `data_insertatlist` | ✓ | ✓ |
 | `data_itemnumoflist` | ✓ | ✓ |
 | `data_itemoflist` | ✓ | ✓ |
@@ -64,7 +60,7 @@ Project monitors preserve their target ownership and reporter parameters when AI
 | `data_replaceitemoflist` | ✓ | ✓ |
 | `data_setvariableto` | ✓ | ✓ |
 | `data_showlist` | ✓ | ✓ |
-| `data_showvariable` | ✓ | x |
+| `data_showvariable` | ✓ | ✓ |
 | `data_variable` | ✓ | ✓ |
 
 ### Events
@@ -176,27 +172,28 @@ Project monitors preserve their target ownership and reporter parameters when AI
 | `sensing_answer` | ✓ | x |
 | `sensing_askandwait` | ✓ | x |
 | `sensing_coloristouchingcolor` | ✓ | x |
-| `sensing_current` | ✓ | x |
-| `sensing_dayssince2000` | ✓ | x |
+| `sensing_current` | ✓ | ✓ |
+| `sensing_dayssince2000` | ✓ | ✓ |
 | `sensing_distanceto` | ✓ | x |
 | `sensing_distancetomenu` | ✓ | - |
 | `sensing_keyoptions` | ✓ | - |
 | `sensing_keypressed` | ✓ | ✓ |
 | `sensing_loud` | ✓ | x |
-| `sensing_loudness` | ✓ | x |
+| `sensing_loudness` | ✓ | ✓ |
 | `sensing_mousedown` | ✓ | ✓ |
 | `sensing_mousex` | ✓ | ✓ |
 | `sensing_mousey` | ✓ | ✓ |
+| `sensing_online` | x | ✓ |
 | `sensing_of` | ✓ | x |
 | `sensing_of_object_menu` | ✓ | - |
-| `sensing_resettimer` | ✓ | x |
+| `sensing_resettimer` | ✓ | ✓ |
 | `sensing_setdragmode` | ✓ | x |
 | `sensing_timer` | ✓ | ✓ |
 | `sensing_touchingcolor` | ✓ | x |
 | `sensing_touchingobject` | ✓ | x |
 | `sensing_touchingobjectmenu` | ✓ | - |
 | `sensing_userid` | ✓ | x |
-| `sensing_username` | ✓ | x |
+| `sensing_username` | ✓ | ✓ |
 
 ### Sound
 
@@ -263,10 +260,17 @@ headless runtime draws or changes pen state.
 | `pen_setPenSizeTo` | ✓ | x |
 | `pen_stamp` | ✓ | x |
 
-## Reading this checklist
+## Live monitor sources
 
-The Rust runtime can run headless or with the graphical renderer. `looks_say` writes its value to the console and displays a speech bubble in graphical mode; think bubbles work the same way without console output. Motion updates sprite and clone state, and backdrop switching updates the Stage. Variable/list data, clone state, broadcasts, waits, and supported event hats are integrated with the scheduler. The renderer has a separate drawable path for clones, but clone visibility in `motion-point-test.sb3` remains a reported graphical issue and is not marked as verified here. Other visual effects, costume changes, sound, pen blocks, and unsupported sensing remain unsimulated. Some menu blocks and procedure definition blocks are structural data used by their parent or call block rather than runnable commands.
+Monitor display support does not imply that a reporter can be used by a script or that it is a Scratch variable. Only `data_variable` refers to a project variable; variable monitors resolve the same ID and owner scope as that reporter.
 
-The counts and marks are a manually reviewed snapshot. Update this file when the Rust block generator or runtime gains or loses support.
+| Monitor | Live value source |
+|---|---|
+| `data_variable`, `data_listcontents` | Canonical variable or complete list state. Lists render only the visible row range. |
+| `motion_xposition`, `motion_yposition`, `motion_direction`, `looks_size` | Snapshot for the monitor's named sprite. These remain monitor-only reporter support. |
+| `looks_backdropnumbername` | Selected Stage backdrop name or one-based number. |
+| `sensing_current`, `sensing_dayssince2000`, `sensing_mousex`, `sensing_mousey`, `sensing_mousedown` | Current runtime values, refreshed independently from script reporter evaluation. |
+| `sensing_timer` | Renderer clock, updated while the monitor is visible. |
+| `sensing_keypressed`, `sensing_online`, `sensing_username`, `sensing_loudness` | Runtime reporter values; online is `false`, username defaults to `playerNNNN`, and loudness is `-1` without microphone input. |
 
-Motion position updates include `motion_setx` and `motion_sety`; position updates use SVG or bitmap costume bounds for Scratch-style fencing. Motion reporter monitors retain their `spriteName` owner and display that sprite's x, y, or direction state. `motion_pointtowards` handles random direction, mouse, and named sprite targets. Clone script state and transforms are independent in runtime snapshots; graphical clone visibility still needs verification in the reported fixture.
+Other reporter monitors can display their saved project value, but are not live unless a source is listed above. Monitor data is batched at the renderer cadence; do not add monitor polling to generated blocks or variable-read hot paths.

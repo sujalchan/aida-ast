@@ -1274,6 +1274,11 @@ fn generate_resumable_statement(
     indent: usize,
 ) {
     match block.opcode.as_str() {
+        "sensing_resettimer" => line(
+            output,
+            indent,
+            "state.reset_project_timer(clock.now_millis());",
+        ),
         "event_broadcast" | "event_broadcastandwait" => {
             let message = broadcast_message_expression(
                 target,
@@ -1467,6 +1472,21 @@ fn generate_resumable_statement(
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
+            }
+        }
+        "data_showvariable" | "data_hidevariable" => {
+            if let Some(variable) = variable_field(block, "VARIABLE", variables) {
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "state.set_variable_visible({}, {});",
+                        variable.slot,
+                        block.opcode == "data_showvariable"
+                    ),
+                );
+            } else {
+                line(output, indent, "todo!(\"missing variable reference\");");
             }
         }
         "data_showlist" | "data_hidelist" => {
@@ -1695,6 +1715,89 @@ fn generate_resumable_statement(
                 &format!("state.set_xy(scratch_to_number({x}), scratch_to_number({y}));"),
             );
         }
+        "motion_setx" => {
+            let x = expression(
+                target,
+                block.inputs.get("X"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "let (motion_x, motion_y) = state.position(state.current_instance()).unwrap_or((0.0, 0.0)); state.set_xy(scratch_to_number({x}), motion_y);"
+                ),
+            );
+        }
+        "motion_sety" => {
+            let y = expression(
+                target,
+                block.inputs.get("Y"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "let (motion_x, motion_y) = state.position(state.current_instance()).unwrap_or((0.0, 0.0)); state.set_xy(motion_x, scratch_to_number({y}));"
+                ),
+            );
+        }
+        "motion_pointindirection" => {
+            let direction = expression(
+                target,
+                block.inputs.get("DIRECTION"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent,
+                &format!("state.set_direction(scratch_to_number({direction}));"),
+            );
+        }
+        "motion_pointtowards" => {
+            let random_target =
+                block
+                    .inputs
+                    .get("TOWARDS")
+                    .and_then(parse_input)
+                    .and_then(|input| match input {
+                        InputValue::BlockReference(id) => target
+                            .blocks
+                            .get(id)
+                            .and_then(|menu| field_value(menu, "TOWARDS"))
+                            .and_then(Value::as_str),
+                        InputValue::String(value) | InputValue::Number(value) => value.as_str(),
+                        _ => None,
+                    })
+                    == Some("_random_");
+            if random_target {
+                line(
+                    output,
+                    indent,
+                    "state.set_direction(scratch_round(scratch_random(-180.0_f64, 180.0_f64)));",
+                );
+            } else if let Some(position) =
+                motion_target_position_expression(target, block, "TOWARDS")
+            {
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "if let Some((target_x, target_y)) = {position} {{ if let Some((motion_x, motion_y)) = state.position(state.current_instance()) {{ state.set_direction(90.0 - (target_y - motion_y).atan2(target_x - motion_x).to_degrees()); }} }}"
+                    ),
+                );
+            }
+        }
         "motion_goto" => {
             if let Some(position) = motion_target_position_expression(target, block, "TO") {
                 line(
@@ -1853,7 +1956,16 @@ fn motion_target_position_expression(
             InputValue::BlockReference(id) => target
                 .blocks
                 .get(id)
-                .and_then(|menu| field_value(menu, "TO"))
+                .and_then(|menu| {
+                    field_value(
+                        menu,
+                        if input_name == "TOWARDS" {
+                            "TOWARDS"
+                        } else {
+                            "TO"
+                        },
+                    )
+                })
                 .and_then(Value::as_str),
             InputValue::String(value) | InputValue::Number(value) => value.as_str(),
             _ => None,

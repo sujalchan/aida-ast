@@ -117,6 +117,26 @@ pub struct ScratchAsset {
     pub rotation_center_y: f64,
 }
 
+impl ScratchAsset {
+    pub fn archive_path(&self) -> Option<String> {
+        if !self.md5ext.is_empty() {
+            Some(self.md5ext.clone())
+        } else if !self.asset_id.is_empty() && !self.data_format.is_empty() {
+            Some(format!("{}.{}", self.asset_id, self.data_format))
+        } else {
+            None
+        }
+    }
+
+    pub fn identity(&self) -> &str {
+        if self.asset_id.is_empty() {
+            &self.md5ext
+        } else {
+            &self.asset_id
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(from = "(String, Vec<Value>)")]
 pub struct ScratchList {

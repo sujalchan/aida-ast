@@ -38,6 +38,124 @@ mod tests {
     }
 
     #[test]
+    fn large_list_fixture_uses_compact_initializer_and_preserves_all_items() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/monitor-tests-sensing.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let list = project
+            .targets
+            .iter()
+            .flat_map(|target| target.lists.values())
+            .find(|list| list.items.len() == 200_000)
+            .expect("fixture should contain its complete 200,000-item list");
+        assert!(list.items[0].is_number());
+        assert!(list.items[100_000].is_number());
+        assert!(list.items[199_999].is_number());
+
+        let output = generate(&project);
+        let serialized_items = serde_json::to_string(&list.items).unwrap();
+        assert!(output.contains(&format!("ScratchList::from_json({serialized_items:?})")));
+        assert!(
+            output.len() < 2_000_000,
+            "generated module was {} bytes",
+            output.len()
+        );
+    }
+
+    #[test]
+    fn sensing_fixture_lowers_reporters_as_values_and_emits_live_monitor_snapshots() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/monitor-tests-sensing.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        assert!(output.contains("state.set_variable_visible(0, true);"));
+        assert!(output.contains("state.set_variable_visible(0, false);"));
+        assert!(output.contains("state.days_since_2000()"));
+        assert!(output.contains("state.username()"));
+        assert!(output.contains("state.current_year()"));
+        assert!(output.contains("state.current_day_of_week()"));
+        assert!(output.contains("state.mouse_x()"));
+        assert!(output.contains("state.mouse_y()"));
+        assert!(output.contains("state.mouse_down()"));
+        assert!(output.contains("state.loudness()"));
+        assert!(output.contains("state.project_timer_seconds(clock.now_millis())"));
+        for method in [
+            "current_year",
+            "current_month",
+            "current_date",
+            "current_day_of_week",
+            "current_hour",
+            "current_minute",
+            "current_second",
+        ] {
+            assert!(
+                output.contains(&format!("state.{method}()")),
+                "missing {method}"
+            );
+            assert!(
+                output.contains(&format!("scratch_string(state.{method}())")),
+                "{method} is not used through the shared reporter path in a block input"
+            );
+        }
+        for reporter in [
+            "state.days_since_2000()",
+            "state.mouse_x()",
+            "state.mouse_y()",
+            "state.project_timer_seconds(clock.now_millis())",
+            "state.username()",
+            "state.mouse_down()",
+        ] {
+            assert!(
+                output.contains(&format!("scratch_string({reporter})")),
+                "{reporter} is not used through the shared reporter path"
+            );
+        }
+        assert!(output.contains("scratch_subtract(state.days_since_2000(), state.get_shared(0))"));
+        for monitor_key in [
+            "sensing_dayssince2000/sensing_dayssince2000",
+            "sensing_current/current_year",
+            "sensing_current/current_month",
+            "sensing_current/current_date",
+            "sensing_current/current_dayofweek",
+            "sensing_current/current_hour",
+            "sensing_current/current_minute",
+            "sensing_current/current_second",
+            "sensing_online/online",
+            "sensing_username/sensing_username",
+            "sensing_mousex/sensing_mousex",
+            "sensing_mousey/sensing_mousey",
+            "sensing_mousedown/sensing_mousedown",
+        ] {
+            assert!(
+                output.contains(&format!("__reporter/Stage/{monitor_key}")),
+                "missing monitor snapshot for {monitor_key}"
+            );
+        }
+        assert!(output.contains("sensing_online"));
+        assert!(output.contains("value: (false).into()"));
+        assert!(output.contains(
+            "ReporterSnapshot { key: \"__reporter/Stage/sensing_current/current_year\".to_owned(), value: (self.state.current_year()).into() }"
+        ));
+        assert!(output.contains(
+            "ReporterSnapshot { key: \"__reporter/Stage/sensing_username/sensing_username\".to_owned(), value: (self.state.username()).into() }"
+        ));
+        assert!(output.contains("ReporterSnapshot"));
+        assert!(output.contains("pub fn has_live_sensing_monitors(&self) -> bool { true }"));
+        assert!(!output.contains("unsupported reporter: sensing_dayssince2000"));
+        assert!(!output.contains("unsupported reporter: sensing_username"));
+        assert!(!output.contains("unsupported reporter: sensing_online"));
+        assert!(!output.contains("unsupported statement: data_showvariable"));
+        assert!(!output.contains("unsupported statement: data_hidevariable"));
+    }
+
+    #[test]
     fn clone_fixture_lowers_clone_creation_and_clone_start_hats() {
         let input = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -184,6 +302,29 @@ mod tests {
             "motion_changeyby",
             "motion_glideto",
             "motion_glidesecstoxy",
+        ] {
+            assert!(!output.contains(&format!("unsupported statement: {opcode}")));
+        }
+    }
+
+    #[test]
+    fn motion_point_fixture_lowers_set_x_y_and_clone_direction_blocks() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/motion-point-test.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+        assert!(output.contains("state.set_xy(scratch_to_number(0.0_f64), motion_y);"));
+        assert!(output.contains("state.set_xy(motion_x, scratch_to_number(0.0_f64));"));
+        assert!(output.contains("state.set_direction(scratch_to_number(90.0_f64));"));
+        assert!(output.contains("scratch_random(-180.0_f64, 180.0_f64)"));
+        for opcode in [
+            "motion_setx",
+            "motion_sety",
+            "motion_pointindirection",
+            "motion_pointtowards",
         ] {
             assert!(!output.contains(&format!("unsupported statement: {opcode}")));
         }

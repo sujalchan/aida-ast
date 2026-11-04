@@ -88,6 +88,38 @@ fn render_expression(target: &ScratchTarget, id: &str) -> String {
         .text
 }
 
+#[test]
+fn timer_blocks_lower_to_the_shared_project_timer() {
+    let mut reset = block("sensing_resettimer", &[]);
+    reset.next = Some("set_x".to_owned());
+    let mut set_x = block("motion_setx", &[("X", reference("timer"))]);
+    set_x.next = None;
+    let timer = block("sensing_timer", &[]);
+    let project = ScratchProject {
+        targets: vec![target(vec![
+            ("hat", hat("reset")),
+            ("reset", reset),
+            ("set_x", set_x),
+            ("timer", timer),
+        ])],
+        monitors: vec![],
+    };
+
+    let generated = crate::rust::generate(&project);
+    assert!(
+        generated.contains("state.reset_project_timer(clock.now_millis());"),
+        "{generated}"
+    );
+    assert!(
+        generated.contains("state.project_timer_seconds(clock.now_millis())"),
+        "{generated}"
+    );
+    assert!(
+        generated.contains("state.reset_project_timer(scheduler.now_millis());"),
+        "{generated}"
+    );
+}
+
 fn nested_target() -> ScratchTarget {
     let mut set = block("data_setvariableto", &[("VALUE", reference("add"))]);
     set.fields

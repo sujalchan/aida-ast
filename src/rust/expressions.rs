@@ -230,7 +230,12 @@ fn block_expression(
         "sensing_mousedown" => "state.mouse_down()".to_owned(),
         "sensing_mousex" => "state.mouse_x()".to_owned(),
         "sensing_mousey" => "state.mouse_y()".to_owned(),
-        "sensing_timer" => "clock.now_millis() as f64 / 1000.0".to_owned(),
+        "sensing_timer" => "state.project_timer_seconds(clock.now_millis())".to_owned(),
+        "sensing_current" => current_expression(block),
+        "sensing_dayssince2000" => "state.days_since_2000()".to_owned(),
+        "sensing_online" => "false".to_owned(),
+        "sensing_username" => "state.username()".to_owned(),
+        "sensing_loudness" => "state.loudness()".to_owned(),
         "data_listcontainsitem" => list_field(block, "LIST", lists)
             .map(|list| {
                 format!(
@@ -258,6 +263,30 @@ fn block_expression(
             .map(text_literal)
             .unwrap_or_else(|| unsupported_expression("missing text field")),
         opcode => unsupported_expression(&format!("unsupported reporter: {opcode}")),
+    }
+}
+
+fn current_expression(block: &ScratchBlock) -> String {
+    block
+        .fields
+        .get("CURRENTMENU")
+        .and_then(Value::as_array)
+        .and_then(|field| field.first())
+        .and_then(Value::as_str)
+        .and_then(current_method)
+        .map_or_else(|| "0.0".to_owned(), |method| format!("state.{method}()"))
+}
+
+fn current_method(menu: &str) -> Option<&'static str> {
+    match menu.to_ascii_uppercase().as_str() {
+        "YEAR" => Some("current_year"),
+        "MONTH" => Some("current_month"),
+        "DATE" => Some("current_date"),
+        "DAYOFWEEK" => Some("current_day_of_week"),
+        "HOUR" => Some("current_hour"),
+        "MINUTE" => Some("current_minute"),
+        "SECOND" => Some("current_second"),
+        _ => None,
     }
 }
 
@@ -883,6 +912,121 @@ fn random_argument(
 // emit a typed placeholder that reports why this expression could not be lowered.
 fn unsupported_expression(reason: &str) -> String {
     format!("ScratchValue::Number(todo!({}))", quote(reason))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expression;
+    use crate::parser::ScratchTarget;
+    use serde_json::json;
+    use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn sensing_reporter_inside_nested_operator_uses_the_shared_input_evaluator() {
+        let target: ScratchTarget = serde_json::from_value(json!({
+            "name": "Stage",
+            "isStage": true,
+            "blocks": {
+                "loudness": { "opcode": "sensing_loudness" },
+                "join": {
+                    "opcode": "operator_join",
+                    "inputs": {
+                        "STRING1": [3, "loudness", [10, "fallback"]],
+                        "STRING2": [1, [10, " dB"]]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+        let root = json!([3, "join"]);
+        let generated = expression(
+            &target,
+            Some(&root),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut HashSet::new(),
+        );
+
+        assert!(generated.contains("state.loudness()"));
+        assert!(generated.starts_with("scratch_join("));
+        assert!(generated.contains("dB"));
+        assert!(!generated.contains("fallback"));
+    }
+
+    #[test]
+    fn project_sensing_reporters_lower_inside_join_and_comparison_inputs() {
+        let mut target: ScratchTarget = serde_json::from_value(json!({
+            "name": "Stage",
+            "isStage": true,
+            "blocks": {
+                "current": {
+                    "opcode": "sensing_current",
+                    "fields": { "CURRENTMENU": ["DAYOFWEEK", null] }
+                },
+                "days": { "opcode": "sensing_dayssince2000" },
+                "online": { "opcode": "sensing_online" },
+                "username": { "opcode": "sensing_username" },
+                "mousex": { "opcode": "sensing_mousex" },
+                "mousey": { "opcode": "sensing_mousey" },
+                "mousedown": { "opcode": "sensing_mousedown" },
+                "timer": { "opcode": "sensing_timer" },
+                "loudness": { "opcode": "sensing_loudness" },
+                "consumer": { "opcode": "operator_join" }
+            }
+        }))
+        .unwrap();
+        let cases = [
+            ("current", "state.current_day_of_week()"),
+            ("days", "state.days_since_2000()"),
+            ("online", "false"),
+            ("username", "state.username()"),
+            ("mousex", "state.mouse_x()"),
+            ("mousey", "state.mouse_y()"),
+            ("mousedown", "state.mouse_down()"),
+            ("timer", "state.project_timer_seconds(clock.now_millis())"),
+            ("loudness", "state.loudness()"),
+        ];
+
+        for (sensor, expected) in cases {
+            let consumer = target.blocks.get_mut("consumer").unwrap();
+            consumer.opcode = "operator_join".to_owned();
+            consumer.inputs = HashMap::from([
+                ("STRING1".to_owned(), json!([3, sensor])),
+                ("STRING2".to_owned(), json!([1, [10, ""]])),
+            ]);
+            let join = expression(
+                &target,
+                Some(&json!([3, "consumer"])),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut HashSet::new(),
+            );
+            assert!(join.starts_with("scratch_join("));
+            assert!(join.contains(expected), "{sensor} missing in {join}");
+
+            let consumer = target.blocks.get_mut("consumer").unwrap();
+            consumer.opcode = "operator_equals".to_owned();
+            consumer.inputs = HashMap::from([
+                ("OPERAND1".to_owned(), json!([3, sensor])),
+                ("OPERAND2".to_owned(), json!([1, [10, ""]])),
+            ]);
+            let comparison = expression(
+                &target,
+                Some(&json!([3, "consumer"])),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &mut HashSet::new(),
+            );
+            assert!(comparison.starts_with("scratch_equals("));
+            assert!(
+                comparison.contains(expected),
+                "{sensor} missing in {comparison}"
+            );
+        }
+    }
 }
 
 // lower a boolean socket, using false when the Scratch socket is empty.
