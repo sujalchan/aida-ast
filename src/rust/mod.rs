@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod direct_numeric;
 mod expressions;
 mod literals;
 mod project;
@@ -37,6 +38,38 @@ mod tests {
         let output = generate(&project);
 
         assert_eq!(output.matches("fn new_broadcast_scripts(").count(), 1);
+    }
+
+    #[test]
+    fn wireframe_scripts_only_emit_reachable_procedure_bodies() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/wireframe-engine.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let (output, _) = generate_with_list_data(&project, false, "wireframe.rs.lists.json");
+        let (first, rest) = output
+            .split_once("fn step_green_flag_script_engine_from_nowhere_2(")
+            .unwrap();
+        let (second, third) = rest
+            .split_once("fn step_green_flag_script_engine_from_nowhere_3(")
+            .unwrap();
+        let third = third
+            .split_once("fn new_green_flag_script_engine_from_nowhere_3_for(")
+            .unwrap()
+            .0;
+        assert!(first.contains("fn direct_procedure_1_4("));
+        assert!(first.contains("fn direct_procedure_1_4_numbers("));
+        assert!(first.contains("cached_numeric_item_"));
+        assert!(first.contains("script.warp_budget.expired(clock)"));
+        assert!(!first.contains("fn direct_procedure_1_5("));
+        assert!(first.contains("ProcedureFrame::new(8,"));
+        assert!(first.contains("ProcedureFrame::new(4,"));
+        assert!(!second.contains("ProcedureFrame::new(4,"));
+        assert!(!third.contains("ProcedureFrame::new(4,"));
+        assert!(!second.contains("script.frames.pop(); continue;"));
+        assert!(!third.contains("script.frames.pop(); continue;"));
     }
 
     #[test]

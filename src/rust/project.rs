@@ -38,10 +38,12 @@ pub(super) struct VariableInfo {
     pub(super) target_index: usize,
     pub(super) numeric: bool,
     pub(super) non_nan: bool,
+    pub(super) index_read_override: Option<String>,
 }
 
 impl VariableInfo {
     pub(super) fn read_expression(&self) -> String {
+        if let Some(value) = &self.index_read_override { return value.clone(); }
         let method = if self.is_stage { "get_shared" } else { "get" };
         format!("state.{method}({})", self.slot)
     }
@@ -59,6 +61,7 @@ pub(super) struct ListInfo {
     pub(super) target: String,
     pub(super) is_stage: bool,
     pub(super) target_index: usize,
+    pub(super) cache_numeric_reads: bool,
 }
 
 /// generate the module header, saved variable declarations, and target scripts.
@@ -522,12 +525,14 @@ fn generate_internal(
     );
     let monitor_reporters = reporter_monitor_values(project, &variables, &lists);
     let snapshot_base = if uses_project_timer {
-        "self.state.observable_snapshot_with_timer(tick, self.scheduler.now_millis())"
+        "self.state.observable_snapshot_filtered_with_timer(tick, self.scheduler.now_millis(), include_hidden_items)"
     } else {
-        "self.state.observable_snapshot(tick)"
+        "self.state.observable_snapshot_filtered(tick, include_hidden_items)"
     };
     // reporter monitors with connected inputs temporarily use their declared target context.
-    output.push_str(&format!("    pub fn observable_snapshot(&mut self, tick: usize) -> RuntimeSnapshot {{ let mut snapshot = {snapshot_base};\n"));
+    output.push_str("    pub fn observable_snapshot(&mut self, tick: usize) -> RuntimeSnapshot { self.snapshot(tick, true) }\n");
+    output.push_str("    pub fn renderer_snapshot(&mut self, tick: usize) -> RuntimeSnapshot { self.snapshot(tick, false) }\n");
+    output.push_str(&format!("    fn snapshot(&mut self, tick: usize, include_hidden_items: bool) -> RuntimeSnapshot {{ let mut snapshot = {snapshot_base};\n"));
     if !monitor_reporters.is_empty() {
         output.push_str(&format!(
             "        snapshot.reporters = Vec::with_capacity({});\n",
@@ -577,6 +582,7 @@ fn generate_internal(
 fn runtime_imports(identifiers: &HashSet<String>) -> String {
     const IMPORTS: &[&str] = &[
         "BubbleKind",
+        "CachedListIndex",
         "scratch_acos_degrees",
         "fast_acos_degrees",
         "fast_asin_degrees",
@@ -821,6 +827,7 @@ fn allocate_variables(project: &ScratchProject) -> HashMap<String, VariableInfo>
                     .unwrap_or(0),
                 numeric: numeric_variables.contains(id),
                 non_nan: non_nan_variables.contains(id),
+                index_read_override: None,
             });
             if target.is_stage {
                 info.name = variable.name.clone();
@@ -1030,6 +1037,7 @@ fn input_is_numeric(
 
 // assign each scratch list id a stable shared-state slot.
 fn allocate_lists(project: &ScratchProject) -> HashMap<String, ListInfo> {
+    let written_lists = project.targets.iter().flat_map(|target| target.blocks.values()).filter(|block| matches!(block.opcode.as_str(), "data_addtolist" | "data_deleteoflist" | "data_deletealloflist" | "data_insertatlist" | "data_replaceitemoflist")).filter_map(|block| block.fields.get("LIST")?.as_array()?.get(1)?.as_str()).collect::<HashSet<_>>();
     let mut entries = BTreeMap::new();
     for target in &project.targets {
         for (id, list) in &target.lists {
@@ -1045,6 +1053,7 @@ fn allocate_lists(project: &ScratchProject) -> HashMap<String, ListInfo> {
                         candidate.name == target.name && candidate.is_stage == target.is_stage
                     })
                     .unwrap_or(0),
+                cache_numeric_reads: list.items.len() >= 1024 && !written_lists.contains(id.as_str()),
             });
             if target.is_stage {
                 info.name = list.name.clone();

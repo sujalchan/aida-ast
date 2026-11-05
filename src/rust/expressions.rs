@@ -113,17 +113,66 @@ fn block_expression(
             input(right, active)
         )
     };
+    // A list selected for cached numeric reads still owns its original dynamic
+    // values; the runtime invalidates the cache when the list changes.
+    let numeric_input = |name: &str, active: &mut HashSet<String>| {
+        let candidate = block.inputs.get(name).and_then(parse_input).and_then(|input| match input {
+            InputValue::BlockReference(id) => target.blocks.get(id),
+            _ => None,
+        }).filter(|reporter| reporter.opcode == "data_itemoflist");
+        if let Some(reporter) = candidate {
+            if let Some(list) = list_field(reporter, "LIST", lists).filter(|list| list.cache_numeric_reads) {
+                let index = expression(target, reporter.inputs.get("INDEX"), variables, lists, arguments, active);
+                return format!("state.list({}).get_cached_number({index})", list.slot);
+            }
+        }
+        input(name, active)
+    };
+    let numeric_binary = |function: &str, active: &mut HashSet<String>| {
+        format!("{function}({}, {})", numeric_input("NUM1", active), numeric_input("NUM2", active))
+    };
+    // Canonical small integer text has exactly the same Scratch comparison
+    // text as its numeric value, including when the other operand falls back
+    // to a string comparison. Emit a number to avoid parsing it on every test.
+    let comparison = |function: &str, active: &mut HashSet<String>| {
+        let operand = |name: &str, active: &mut HashSet<String>| {
+            let value = block.inputs.get(name);
+            let other = if name == "OPERAND1" { "OPERAND2" } else { "OPERAND1" };
+            let both_literals = matches!(block.inputs.get(other).and_then(parse_input), Some(InputValue::String(_) | InputValue::Number(_)));
+            if let Some(InputValue::String(value)) = value.and_then(parse_input).filter(|_| !both_literals) {
+                if let Some(text) = value.as_str() {
+                    if let Ok(number) = text.parse::<i32>() {
+                        if number.unsigned_abs() <= 1_000_000 && number.to_string() == text {
+                            return format!("{number}.0_f64");
+                        }
+                    }
+                }
+            }
+            input(name, active)
+        };
+        let left = operand("OPERAND1", active);
+        let right = operand("OPERAND2", active);
+        let both_literals = ["OPERAND1", "OPERAND2"].iter().all(|name| matches!(block.inputs.get(*name).and_then(parse_input), Some(InputValue::String(_) | InputValue::Number(_))));
+        if !both_literals && comparison_input_is_numeric(target, block.inputs.get("OPERAND1"))
+            && comparison_input_is_numeric(target, block.inputs.get("OPERAND2"))
+        {
+            let op = match function { "scratch_equals" => "==", "scratch_greater_than" => ">", "scratch_less_than" => "<", _ => unreachable!() };
+            format!("{{ let left = {left}; let right = {right}; if left.is_nan() || right.is_nan() {{ {function}(left, right) }} else {{ left {op} right }} }}")
+        } else {
+            format!("{function}({left}, {right})")
+        }
+    };
     match block.opcode.as_str() {
-        "operator_add" => binary("scratch_add", "NUM1", "NUM2", active),
-        "operator_subtract" => binary("scratch_subtract", "NUM1", "NUM2", active),
-        "operator_multiply" => binary("scratch_multiply", "NUM1", "NUM2", active),
-        "operator_divide" => binary("scratch_divide", "NUM1", "NUM2", active),
+        "operator_add" => numeric_binary("scratch_add", active),
+        "operator_subtract" => numeric_binary("scratch_subtract", active),
+        "operator_multiply" => numeric_binary("scratch_multiply", active),
+        "operator_divide" => numeric_binary("scratch_divide", active),
         "operator_mod" => binary("scratch_mod", "NUM1", "NUM2", active),
         "operator_equals" if identical_literal_inputs(block) => "true".to_owned(),
         "operator_equals" => numeric_list_equality(target, block, variables, lists)
-            .unwrap_or_else(|| binary("scratch_equals", "OPERAND1", "OPERAND2", active)),
-        "operator_gt" => binary("scratch_greater_than", "OPERAND1", "OPERAND2", active),
-        "operator_lt" => binary("scratch_less_than", "OPERAND1", "OPERAND2", active),
+            .unwrap_or_else(|| comparison("scratch_equals", active)),
+        "operator_gt" => comparison("scratch_greater_than", active),
+        "operator_lt" => comparison("scratch_less_than", active),
         "operator_and" => format!(
             "scratch_and({}, {})",
             boolean_input(
@@ -284,6 +333,17 @@ fn block_expression(
             .map(text_literal)
             .unwrap_or_else(|| unsupported_expression("missing text field")),
         opcode => unsupported_expression(&format!("unsupported reporter: {opcode}")),
+    }
+}
+
+// Numeric comparison operands can use native operators except for NaN,
+// where Scratch deliberately falls back to text ordering.
+fn comparison_input_is_numeric(target: &ScratchTarget, input: Option<&Value>) -> bool {
+    match input.and_then(parse_input) {
+        Some(InputValue::Number(_)) => true,
+        Some(InputValue::String(value)) => value.as_str().and_then(|text| text.parse::<i32>().ok().map(|n| (text, n))).is_some_and(|(text, n)| n.unsigned_abs() <= 1_000_000 && n.to_string() == text),
+        Some(InputValue::BlockReference(id)) => target.blocks.get(id).is_some_and(|block| matches!(block.opcode.as_str(), "operator_add" | "operator_subtract" | "operator_multiply" | "operator_divide" | "operator_mod" | "operator_round" | "data_lengthoflist" | "data_itemnumoflist" | "motion_xposition" | "motion_yposition" | "motion_direction" | "sound_volume" | "sensing_mousex" | "sensing_mousey" | "sensing_timer" | "sensing_dayssince2000" | "sensing_loudness")),
+        _ => false,
     }
 }
 
@@ -1076,6 +1136,26 @@ mod tests {
     use crate::parser::ScratchTarget;
     use serde_json::json;
     use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn comparison_only_normalizes_canonical_integer_text() {
+        let mut target: ScratchTarget = serde_json::from_value(json!({
+            "name": "Stage", "isStage": true, "blocks": {
+                "sensor": {"opcode": "sensing_loudness"},
+                "compare": {"opcode": "operator_gt", "inputs": {"OPERAND1": [2, "sensor"], "OPERAND2": [1, [10, "240"]]}}
+            }
+        })).unwrap();
+        let root = json!([2, "compare"]);
+        let generate = |target: &ScratchTarget| expression(target, Some(&root), &HashMap::new(), &HashMap::new(), &HashMap::new(), &mut HashSet::new());
+        let generated = generate(&target);
+        assert!(generated.contains("let left = state.loudness()"));
+        assert!(generated.contains("let right = 240.0_f64"));
+        assert!(generated.contains("scratch_greater_than(left, right)"));
+        for value in ["0240", "-0", " 240", "240.0", "1000001"] {
+            target.blocks.get_mut("compare").unwrap().inputs.insert("OPERAND2".into(), json!([1, [10, value]]));
+            assert!(generate(&target).contains(&format!("{value:?}")));
+        }
+    }
 
     #[test]
     fn sensing_reporter_inside_nested_operator_uses_the_shared_input_evaluator() {

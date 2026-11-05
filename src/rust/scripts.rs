@@ -25,7 +25,7 @@ use super::{
     expressions::expression,
     literals::{line, quote},
     project::{ListInfo, VariableInfo, rust_identifier},
-    statements::generate_resumable_script,
+    statements::{generate_direct_procedures, generate_resumable_script},
 };
 
 #[derive(Clone)]
@@ -203,8 +203,12 @@ pub(super) fn generate_green_flag_functions(
 
     generate_edge_hat_poller(&scripts, output);
 
+    let mut emitted_targets = HashSet::new();
     for script in &scripts {
         let procedures = procedure_signatures(script.target);
+        if emitted_targets.insert(script.target_index) {
+            generate_direct_procedures(script.target, script.target_index, variables, lists, &procedures, output);
+        }
         let (start_pc, loop_count) = generate_resumable_script(
             script.target,
             script.hat.next.as_deref(),
@@ -212,6 +216,7 @@ pub(super) fn generate_green_flag_functions(
             lists,
             &procedures,
             &script.function,
+            script.target_index,
             fast_math,
             output,
         );
