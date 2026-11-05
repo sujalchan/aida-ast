@@ -43,7 +43,9 @@ pub(super) struct VariableInfo {
 
 impl VariableInfo {
     pub(super) fn read_expression(&self) -> String {
-        if let Some(value) = &self.index_read_override { return value.clone(); }
+        if let Some(value) = &self.index_read_override {
+            return value.clone();
+        }
         let method = if self.is_stage { "get_shared" } else { "get" };
         format!("state.{method}({})", self.slot)
     }
@@ -205,8 +207,15 @@ fn generate_internal(
     };
     let mut output = String::new();
 
-    generate_green_flag_functions(project, &variables, &lists, fast_math, &mut output);
-    generate_scripts(project, &variables, &lists, &mut output);
+    generate_green_flag_functions(
+        project,
+        &variables,
+        &lists,
+        fast_math,
+        false,
+        &mut output,
+    );
+    generate_scripts(project, &variables, &lists, false, &mut output);
 
     // refresh volume monitor snapshots only for projects that can change volume.
     if has_sound_volume_setter {
@@ -1037,7 +1046,22 @@ fn input_is_numeric(
 
 // assign each scratch list id a stable shared-state slot.
 fn allocate_lists(project: &ScratchProject) -> HashMap<String, ListInfo> {
-    let written_lists = project.targets.iter().flat_map(|target| target.blocks.values()).filter(|block| matches!(block.opcode.as_str(), "data_addtolist" | "data_deleteoflist" | "data_deletealloflist" | "data_insertatlist" | "data_replaceitemoflist")).filter_map(|block| block.fields.get("LIST")?.as_array()?.get(1)?.as_str()).collect::<HashSet<_>>();
+    let written_lists = project
+        .targets
+        .iter()
+        .flat_map(|target| target.blocks.values())
+        .filter(|block| {
+            matches!(
+                block.opcode.as_str(),
+                "data_addtolist"
+                    | "data_deleteoflist"
+                    | "data_deletealloflist"
+                    | "data_insertatlist"
+                    | "data_replaceitemoflist"
+            )
+        })
+        .filter_map(|block| block.fields.get("LIST")?.as_array()?.get(1)?.as_str())
+        .collect::<HashSet<_>>();
     let mut entries = BTreeMap::new();
     for target in &project.targets {
         for (id, list) in &target.lists {
@@ -1053,7 +1077,8 @@ fn allocate_lists(project: &ScratchProject) -> HashMap<String, ListInfo> {
                         candidate.name == target.name && candidate.is_stage == target.is_stage
                     })
                     .unwrap_or(0),
-                cache_numeric_reads: list.items.len() >= 1024 && !written_lists.contains(id.as_str()),
+                cache_numeric_reads: list.items.len() >= 1024
+                    && !written_lists.contains(id.as_str()),
             });
             if target.is_stage {
                 info.name = list.name.clone();

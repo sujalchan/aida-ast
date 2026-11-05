@@ -44,6 +44,7 @@ pub(super) fn generate_green_flag_functions(
     variables: &HashMap<String, VariableInfo>,
     lists: &HashMap<String, ListInfo>,
     fast_math: bool,
+    no_warp_timer: bool,
     output: &mut String,
 ) {
     let scripts = event_scripts(project, variables, lists);
@@ -207,7 +208,16 @@ pub(super) fn generate_green_flag_functions(
     for script in &scripts {
         let procedures = procedure_signatures(script.target);
         if emitted_targets.insert(script.target_index) {
-            generate_direct_procedures(script.target, script.target_index, variables, lists, &procedures, output);
+            generate_direct_procedures(
+                script.target,
+                script.target_index,
+                variables,
+                lists,
+                &procedures,
+                fast_math,
+                no_warp_timer,
+                output,
+            );
         }
         let (start_pc, loop_count) = generate_resumable_script(
             script.target,
@@ -218,6 +228,7 @@ pub(super) fn generate_green_flag_functions(
             &script.function,
             script.target_index,
             fast_math,
+            no_warp_timer,
             output,
         );
         line(
@@ -264,6 +275,7 @@ pub(super) fn generate_scripts(
     project: &ScratchProject,
     variables: &HashMap<String, VariableInfo>,
     lists: &HashMap<String, ListInfo>,
+    no_warp_timer: bool,
     output: &mut String,
 ) {
     let scripts = event_scripts(project, variables, lists);
@@ -433,7 +445,7 @@ pub(super) fn generate_scripts(
     let uses_yield_at_safe_point = output.contains("script.yield_at_safe_point(");
     let uses_warp_budget = output.contains("script.warp_budget")
         || uses_warp_budget_expired
-        || uses_yield_at_safe_point;
+        || (uses_yield_at_safe_point && !no_warp_timer);
     let budget_field = if uses_warp_budget {
         "warp_budget: WarpBudget,"
     } else {
@@ -453,7 +465,12 @@ pub(super) fn generate_scripts(
         helpers.push("    fn warp_budget_expired(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return false; }\n        self.warp_budget.expired(clock)\n    }");
     }
     if uses_yield_at_safe_point {
-        helpers.push("    fn yield_at_safe_point(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return true; }\n        self.warp_budget.expired(clock)\n    }");
+        if no_warp_timer {
+            helpers
+                .push("    fn yield_at_safe_point(&mut self, _clock: &dyn Clock) -> bool { true }");
+        } else {
+            helpers.push("    fn yield_at_safe_point(&mut self, clock: &dyn Clock) -> bool {\n        if !self.frames.last().is_some_and(|frame| frame.warp_mode) { self.warp_budget.reset(); return true; }\n        self.warp_budget.expired(clock)\n    }");
+        }
     }
     if !helpers.is_empty() {
         output.push_str("impl ScriptState {\n");

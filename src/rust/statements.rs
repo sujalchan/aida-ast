@@ -29,7 +29,7 @@ use super::{
         constant_random_bounds, expression, expression_argument, local_expression, local_to_bool,
         local_to_number,
     },
-    literals::{field_value, line, quote},
+    literals::{field_value, line, number_literal, quote},
     project::{ListInfo, VariableInfo},
     scripts::ProcedureSignature,
 };
@@ -47,6 +47,7 @@ struct ProcedureEntry {
     start_pc: usize,
     repeat_count: usize,
     direct_name: Option<String>,
+    direct_warp_name: Option<String>,
     numeric_direct: bool,
 }
 
@@ -141,27 +142,149 @@ impl ScriptGraph {
 // potentially suspending command remain on the resumable path.
 fn direct_eligible(target: &ScratchTarget, procedure: &ProcedureSignature) -> bool {
     if procedure.argument_names.len() != procedure.argument_ids.len()
-        || procedure.argument_names.iter().collect::<HashSet<_>>().len() != procedure.argument_names.len() { return false; }
-    let Some(definition) = target.blocks.get(&procedure.definition_id) else { return false };
+        || procedure
+            .argument_names
+            .iter()
+            .collect::<HashSet<_>>()
+            .len()
+            != procedure.argument_names.len()
+    {
+        return false;
+    }
+    let Some(definition) = target.blocks.get(&procedure.definition_id) else {
+        return false;
+    };
     let mut pending: Vec<&str> = definition.next.as_deref().into_iter().collect();
     let mut seen = HashSet::new();
     while let Some(id) = pending.pop() {
-        if !seen.insert(id) || seen.len() > 80 { return false; }
-        let Some(block) = target.blocks.get(id) else { return false };
+        if !seen.insert(id) || seen.len() > 80 {
+            return false;
+        }
+        let Some(block) = target.blocks.get(id) else {
+            return false;
+        };
         match block.opcode.as_str() {
             "control_if" | "control_if_else" => {
                 for input in ["SUBSTACK", "SUBSTACK2"] {
-                    if let Some(InputValue::BlockReference(branch)) = block.inputs.get(input).and_then(parse_input) { pending.push(branch); }
+                    if let Some(InputValue::BlockReference(branch)) =
+                        block.inputs.get(input).and_then(parse_input)
+                    {
+                        pending.push(branch);
+                    }
                 }
             }
-            "control_stop" if field_value(block, "STOP_OPTION").and_then(Value::as_str) == Some("this script") => {},
-            "data_setvariableto" | "data_changevariableby" | "data_replaceitemoflist"
-            | "motion_gotoxy" | "pen_penDown" | "pen_penUp" => {},
+            "control_stop"
+                if field_value(block, "STOP_OPTION").and_then(Value::as_str)
+                    == Some("this script") => {}
+            "data_setvariableto"
+            | "data_changevariableby"
+            | "data_replaceitemoflist"
+            | "motion_gotoxy"
+            | "pen_penDown"
+            | "pen_penUp" => {}
             _ => return false,
         }
-        if let Some(next) = block.next.as_deref() { pending.push(next); }
+        if let Some(next) = block.next.as_deref() {
+            pending.push(next);
+        }
     }
     true
+}
+
+fn direct_warp_name(target_index: usize, frame_id: usize) -> String {
+    format!("direct_warp_procedure_{target_index}_{frame_id}")
+}
+
+fn direct_warp_eligible(
+    target: &ScratchTarget,
+    procedure: &ProcedureSignature,
+    procedures: &[ProcedureSignature],
+    memo: &mut HashMap<String, bool>,
+    visiting: &mut HashSet<String>,
+) -> bool {
+    if let Some(eligible) = memo.get(&procedure.definition_id) {
+        return *eligible;
+    }
+    if !visiting.insert(procedure.definition_id.clone()) {
+        return false;
+    }
+    let mut pending = target
+        .blocks
+        .get(&procedure.definition_id)
+        .and_then(|definition| definition.next.as_deref())
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    let mut eligible = true;
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id.to_owned()) {
+            continue;
+        }
+        let Some(block) = target.blocks.get(id) else {
+            eligible = false;
+            break;
+        };
+        match block.opcode.as_str() {
+            "control_if"
+            | "control_if_else"
+            | "control_repeat"
+            | "control_repeat_until"
+            | "control_while"
+            | "control_forever" => {
+                for input in ["SUBSTACK", "SUBSTACK2"] {
+                    if let Some(InputValue::BlockReference(branch)) =
+                        block.inputs.get(input).and_then(parse_input)
+                    {
+                        pending.push(branch);
+                    }
+                }
+            }
+            "procedures_call" => {
+                let Some(callee) = procedure_for_call(block, procedures) else {
+                    eligible = false;
+                    break;
+                };
+                if !direct_warp_eligible(target, callee, procedures, memo, visiting) {
+                    eligible = false;
+                    break;
+                }
+            }
+            "data_setvariableto"
+            | "data_changevariableby"
+            | "data_replaceitemoflist"
+            | "motion_gotoxy"
+            | "pen_penDown"
+            | "pen_penUp" => {}
+            // Stop is kept on the resumable path so it can propagate to the script scheduler.
+            _ => {
+                eligible = false;
+                break;
+            }
+        }
+        if let Some(next) = block.next.as_deref() {
+            pending.push(next);
+        }
+    }
+    visiting.remove(&procedure.definition_id);
+    memo.insert(procedure.definition_id.clone(), eligible);
+    eligible
+}
+
+fn direct_warp_eligibility(
+    target: &ScratchTarget,
+    procedures: &[ProcedureSignature],
+) -> HashMap<String, bool> {
+    let mut memo = HashMap::new();
+    for procedure in procedures {
+        direct_warp_eligible(
+            target,
+            procedure,
+            procedures,
+            &mut memo,
+            &mut HashSet::new(),
+        );
+    }
+    memo
 }
 
 fn direct_name(target_index: usize, frame_id: usize) -> String {
@@ -174,60 +297,547 @@ pub(super) fn generate_direct_procedures(
     variables: &HashMap<String, VariableInfo>,
     lists: &HashMap<String, ListInfo>,
     procedures: &[ProcedureSignature],
+    fast_math: bool,
+    no_warp_timer: bool,
     output: &mut String,
 ) {
     for procedure in procedures.iter().filter(|p| direct_eligible(target, p)) {
-        let arguments = procedure.argument_names.iter().enumerate().map(|(i, name)| (name.clone(), format!("argument_{i}"))).collect::<HashMap<_, _>>();
-        let params = (0..procedure.argument_ids.len()).map(|i| format!(", argument_{i}: ScratchValue")).collect::<String>();
+        let arguments = procedure
+            .argument_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), format!("argument_{i}")))
+            .collect::<HashMap<_, _>>();
+        let params = (0..procedure.argument_ids.len())
+            .map(|i| format!(", argument_{i}: ScratchValue"))
+            .collect::<String>();
         let name = direct_name(target_index, procedure.frame_id);
-        let numeric = super::direct_numeric::generate_numeric_direct(target, procedure, variables, lists, &name, false);
-        let body_name = if numeric.is_some() { format!("{name}_dynamic") } else { name };
-        line(output, 0, "#[allow(dead_code, unused_variables, unreachable_code)]");
-        line(output, 0, &format!("fn {body_name}(state: &mut ScratchState, clock: &dyn Clock{params}) {{"));
+        let numeric = super::direct_numeric::generate_numeric_direct(
+            target, procedure, variables, lists, &name, false,
+        );
+        let body_name = if numeric.is_some() {
+            format!("{name}_dynamic")
+        } else {
+            name
+        };
+        line(
+            output,
+            0,
+            "#[allow(dead_code, unused_variables, unreachable_code)]",
+        );
+        line(
+            output,
+            0,
+            &format!("fn {body_name}(state: &mut ScratchState, clock: &dyn Clock{params}) {{"),
+        );
         let definition = &target.blocks[&procedure.definition_id];
-        generate_direct_chain(target, definition.next.as_deref(), variables, lists, &arguments, output, 1);
+        generate_direct_chain(
+            target,
+            definition.next.as_deref(),
+            variables,
+            lists,
+            &arguments,
+            output,
+            1,
+        );
         line(output, 0, "}\n");
         if let Some(numeric) = numeric {
             output.push_str(&numeric);
-            output.push_str(&super::direct_numeric::generate_numeric_direct(target, procedure, variables, lists, &direct_name(target_index, procedure.frame_id), true).unwrap());
+            output.push_str(
+                &super::direct_numeric::generate_numeric_direct(
+                    target,
+                    procedure,
+                    variables,
+                    lists,
+                    &direct_name(target_index, procedure.frame_id),
+                    true,
+                )
+                .unwrap(),
+            );
+        }
+    }
+    if no_warp_timer {
+        let eligibility = direct_warp_eligibility(target, procedures);
+        for procedure in procedures.iter().filter(|procedure| {
+            eligibility
+                .get(&procedure.definition_id)
+                .copied()
+                .unwrap_or(false)
+                && !direct_eligible(target, procedure)
+        }) {
+            let arguments = procedure
+                .argument_names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| (name.clone(), format!("argument_{index}")))
+                .collect::<HashMap<_, _>>();
+            let params = (0..procedure.argument_ids.len())
+                .map(|index| format!(", argument_{index}: ScratchValue"))
+                .collect::<String>();
+            let name = direct_warp_name(target_index, procedure.frame_id);
+            line(
+                output,
+                0,
+                "#[allow(dead_code, unused_variables, unreachable_code, unused_mut)]",
+            );
+            line(
+                output,
+                0,
+                &format!("fn {name}(state: &mut ScratchState, clock: &dyn Clock{params}) {{"),
+            );
+            let definition = &target.blocks[&procedure.definition_id];
+            generate_direct_warp_chain(
+                target,
+                target_index,
+                definition.next.as_deref(),
+                variables,
+                lists,
+                procedures,
+                &eligibility,
+                &arguments,
+                output,
+                1,
+                fast_math,
+            );
+            line(output, 0, "}\n");
         }
     }
 }
 
 fn generate_direct_chain<'a>(
-    target: &'a ScratchTarget, mut id: Option<&'a str>, variables: &HashMap<String, VariableInfo>,
-    lists: &HashMap<String, ListInfo>, arguments: &HashMap<String, String>, output: &mut String, indent: usize,
+    target: &'a ScratchTarget,
+    mut id: Option<&'a str>,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    output: &mut String,
+    indent: usize,
 ) {
     while let Some(current) = id {
         let block = &target.blocks[current];
         match block.opcode.as_str() {
             "control_if" | "control_if_else" => {
-                let condition = boolean_input(target, block, "CONDITION", variables, lists, arguments, &mut HashSet::new());
+                let condition = boolean_input(
+                    target,
+                    block,
+                    "CONDITION",
+                    variables,
+                    lists,
+                    arguments,
+                    &mut HashSet::new(),
+                );
                 line(output, indent, &format!("if {condition} {{"));
-                let branch = |name| block.inputs.get(name).and_then(parse_input).and_then(|value| match value { InputValue::BlockReference(id) => Some(id), _ => None });
-                generate_direct_chain(target, branch("SUBSTACK"), variables, lists, arguments, output, indent + 1);
+                let branch = |name| {
+                    block
+                        .inputs
+                        .get(name)
+                        .and_then(parse_input)
+                        .and_then(|value| match value {
+                            InputValue::BlockReference(id) => Some(id),
+                            _ => None,
+                        })
+                };
+                generate_direct_chain(
+                    target,
+                    branch("SUBSTACK"),
+                    variables,
+                    lists,
+                    arguments,
+                    output,
+                    indent + 1,
+                );
                 if block.opcode == "control_if_else" {
                     line(output, indent, "} else {");
-                    generate_direct_chain(target, branch("SUBSTACK2"), variables, lists, arguments, output, indent + 1);
+                    generate_direct_chain(
+                        target,
+                        branch("SUBSTACK2"),
+                        variables,
+                        lists,
+                        arguments,
+                        output,
+                        indent + 1,
+                    );
                 }
                 line(output, indent, "}");
             }
             "control_stop" => line(output, indent, "return;"),
-            "data_setvariableto" if variable_field(block, "VARIABLE", variables).is_some_and(|variable| !variable.is_stage && !variable.numeric) => {
+            "data_setvariableto"
+                if variable_field(block, "VARIABLE", variables)
+                    .is_some_and(|variable| !variable.is_stage && !variable.numeric) =>
+            {
                 let variable = variable_field(block, "VARIABLE", variables).unwrap();
                 let input = block.inputs.get("VALUE");
-                let value = if let Some(source) = variable_input(target, input, variables, lists, arguments) {
+                let value = if let Some(source) =
+                    variable_input(target, input, variables, lists, arguments)
+                {
                     format!("({source}).clone()")
                 } else {
-                    format!("({}).into()", expression(target, input, variables, lists, arguments, &mut HashSet::new()))
+                    format!(
+                        "({}).into()",
+                        expression(
+                            target,
+                            input,
+                            variables,
+                            lists,
+                            arguments,
+                            &mut HashSet::new()
+                        )
+                    )
                 };
-                line(output, indent, &format!("let scratch_new_value: ScratchValue = {value};"));
-                line(output, indent, &format!("state.set_local_value({}, scratch_new_value);", variable.slot));
+                line(
+                    output,
+                    indent,
+                    &format!("let scratch_new_value: ScratchValue = {value};"),
+                );
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "state.set_local_value({}, scratch_new_value);",
+                        variable.slot
+                    ),
+                );
             }
-            _ => generate_resumable_statement(target, block, usize::MAX, variables, lists, arguments, output, indent),
+            _ => generate_resumable_statement(
+                target,
+                block,
+                usize::MAX,
+                variables,
+                lists,
+                arguments,
+                output,
+                indent,
+            ),
         }
         id = block.next.as_deref();
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_direct_warp_chain<'a>(
+    target: &'a ScratchTarget,
+    target_index: usize,
+    mut id: Option<&'a str>,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    procedures: &[ProcedureSignature],
+    eligibility: &HashMap<String, bool>,
+    arguments: &HashMap<String, String>,
+    output: &mut String,
+    indent: usize,
+    fast_math: bool,
+) {
+    while let Some(current) = id {
+        let Some(block) = target.blocks.get(current) else {
+            return;
+        };
+        match block.opcode.as_str() {
+            "control_if" | "control_if_else" => {
+                let condition = boolean_input(
+                    target,
+                    block,
+                    "CONDITION",
+                    variables,
+                    lists,
+                    arguments,
+                    &mut HashSet::new(),
+                );
+                line(output, indent, &format!("if {condition} {{"));
+                let branch = |name| {
+                    block
+                        .inputs
+                        .get(name)
+                        .and_then(parse_input)
+                        .and_then(|value| match value {
+                            InputValue::BlockReference(id) => Some(id),
+                            _ => None,
+                        })
+                };
+                generate_direct_warp_chain(
+                    target,
+                    target_index,
+                    branch("SUBSTACK"),
+                    variables,
+                    lists,
+                    procedures,
+                    eligibility,
+                    arguments,
+                    output,
+                    indent + 1,
+                    fast_math,
+                );
+                if block.opcode == "control_if_else" {
+                    line(output, indent, "} else {");
+                    generate_direct_warp_chain(
+                        target,
+                        target_index,
+                        branch("SUBSTACK2"),
+                        variables,
+                        lists,
+                        procedures,
+                        eligibility,
+                        arguments,
+                        output,
+                        indent + 1,
+                        fast_math,
+                    );
+                }
+                line(output, indent, "}");
+            }
+            "control_repeat" | "control_repeat_until" | "control_while" | "control_forever" => {
+                let branch =
+                    block.inputs.get("SUBSTACK").and_then(parse_input).and_then(
+                        |value| match value {
+                            InputValue::BlockReference(id) => Some(id),
+                            _ => None,
+                        },
+                    );
+                if let Some(plan) = numeric_loop_plan(target, block, variables) {
+                    generate_direct_numeric_loop(
+                        target, block, branch, variables, arguments, &plan, fast_math, output,
+                        indent,
+                    );
+                } else {
+                    match block.opcode.as_str() {
+                        "control_repeat" => {
+                            let times = expression(
+                                target,
+                                block.inputs.get("TIMES"),
+                                variables,
+                                lists,
+                                arguments,
+                                &mut HashSet::new(),
+                            );
+                            line(
+                                output,
+                                indent,
+                                &format!(
+                                    "let direct_repeat_count = scratch_round({times}).max(0.0) as usize;"
+                                ),
+                            );
+                            line(output, indent, "for _ in 0..direct_repeat_count {");
+                            generate_direct_warp_chain(
+                                target,
+                                target_index,
+                                branch,
+                                variables,
+                                lists,
+                                procedures,
+                                eligibility,
+                                arguments,
+                                output,
+                                indent + 1,
+                                fast_math,
+                            );
+                            line(output, indent, "}");
+                        }
+                        "control_repeat_until" | "control_while" => {
+                            let condition = boolean_input(
+                                target,
+                                block,
+                                "CONDITION",
+                                variables,
+                                lists,
+                                arguments,
+                                &mut HashSet::new(),
+                            );
+                            let condition = if block.opcode == "control_repeat_until" {
+                                format!("!({condition})")
+                            } else {
+                                condition
+                            };
+                            line(output, indent, &format!("while {condition} {{"));
+                            generate_direct_warp_chain(
+                                target,
+                                target_index,
+                                branch,
+                                variables,
+                                lists,
+                                procedures,
+                                eligibility,
+                                arguments,
+                                output,
+                                indent + 1,
+                                fast_math,
+                            );
+                            line(output, indent, "}");
+                        }
+                        "control_forever" => {
+                            line(output, indent, "loop {");
+                            generate_direct_warp_chain(
+                                target,
+                                target_index,
+                                branch,
+                                variables,
+                                lists,
+                                procedures,
+                                eligibility,
+                                arguments,
+                                output,
+                                indent + 1,
+                                fast_math,
+                            );
+                            line(output, indent, "}");
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            "procedures_call" => {
+                let Some(callee) = procedure_for_call(block, procedures) else {
+                    line(
+                        output,
+                        indent,
+                        "todo!(\"missing custom procedure in direct warp block\");",
+                    );
+                    id = block.next.as_deref();
+                    continue;
+                };
+                debug_assert!(
+                    eligibility
+                        .get(&callee.definition_id)
+                        .copied()
+                        .unwrap_or(false)
+                );
+                let values = callee
+                    .argument_ids
+                    .iter()
+                    .map(|argument_id| {
+                        expression(
+                            target,
+                            block.inputs.get(argument_id),
+                            variables,
+                            lists,
+                            arguments,
+                            &mut HashSet::new(),
+                        )
+                    })
+                    .map(|value| format!("({value}).to_owned().into()"))
+                    .collect::<Vec<_>>();
+                let args = if values.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {}", values.join(", "))
+                };
+                let callee_name = if direct_eligible(target, callee) {
+                    direct_name(target_index, callee.frame_id)
+                } else {
+                    direct_warp_name(target_index, callee.frame_id)
+                };
+                line(
+                    output,
+                    indent,
+                    &format!("{callee_name}(state, clock{args});"),
+                );
+            }
+            _ => generate_resumable_statement(
+                target,
+                block,
+                usize::MAX,
+                variables,
+                lists,
+                arguments,
+                output,
+                indent,
+            ),
+        }
+        id = block.next.as_deref();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_direct_numeric_loop(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    _branch: Option<&str>,
+    variables: &HashMap<String, VariableInfo>,
+    _arguments: &HashMap<String, String>,
+    plan: &NumericLoopPlan,
+    fast_math: bool,
+    output: &mut String,
+    indent: usize,
+) {
+    let locals = plan
+        .local_slots
+        .iter()
+        .map(|slot| (*slot, format!("scratch_local_{slot}")))
+        .collect::<HashMap<_, _>>();
+    for slot in &plan.local_slots {
+        line(
+            output,
+            indent,
+            &format!(
+                "let mut scratch_local_{slot} = scratch_to_number({});",
+                variable_read_for_slot(variables, *slot)
+            ),
+        );
+    }
+    match block.opcode.as_str() {
+        "control_repeat" => {
+            let times = local_expression(
+                target,
+                block.inputs.get("TIMES"),
+                variables,
+                &locals,
+                fast_math,
+                &mut HashSet::new(),
+            )
+            .expect("numeric repeat count was validated");
+            line(
+                output,
+                indent,
+                &format!(
+                    "let mut scratch_direct_remaining = scratch_round({}).max(0.0) as usize;",
+                    local_to_number(times)
+                ),
+            );
+            line(output, indent, "while scratch_direct_remaining > 0 {");
+            generate_native_numeric_body(
+                target,
+                variables,
+                plan,
+                &locals,
+                fast_math,
+                output,
+                indent + 1,
+            );
+            line(output, indent + 1, "scratch_direct_remaining -= 1;");
+            line(output, indent, "}");
+        }
+        "control_repeat_until" | "control_while" | "control_forever" => {
+            line(output, indent, "loop {");
+            if block.opcode != "control_forever" {
+                let condition = local_expression(
+                    target,
+                    block.inputs.get("CONDITION"),
+                    variables,
+                    &locals,
+                    fast_math,
+                    &mut HashSet::new(),
+                )
+                .expect("numeric loop condition was validated");
+                let condition = local_to_bool(condition);
+                let stop = if block.opcode == "control_repeat_until" {
+                    condition
+                } else {
+                    format!("!({condition})")
+                };
+                line(output, indent + 1, &format!("if {stop} {{ break; }}"));
+            }
+            generate_native_numeric_body(
+                target,
+                variables,
+                plan,
+                &locals,
+                fast_math,
+                output,
+                indent + 1,
+            );
+            line(output, indent, "}");
+        }
+        _ => unreachable!("numeric local plan requires a Scratch loop"),
+    }
+    generate_local_commits(plan, variables, output, indent);
 }
 
 // emit a resumable step function for one green flag script.
@@ -240,6 +850,7 @@ pub(super) fn generate_resumable_script(
     function_name: &str,
     target_index: usize,
     fast_math: bool,
+    no_warp_timer: bool,
     output: &mut String,
 ) -> (usize, usize) {
     let mut graph = ScriptGraph::new();
@@ -276,7 +887,15 @@ pub(super) fn generate_resumable_script(
     }
     let mut procedure_graphs = Vec::new();
     let mut procedure_entries = HashMap::new();
-    for procedure in procedures.iter().filter(|procedure| reachable.contains(&procedure.definition_id)) {
+    let direct_warp_eligibility = if no_warp_timer {
+        direct_warp_eligibility(target, procedures)
+    } else {
+        HashMap::new()
+    };
+    for procedure in procedures
+        .iter()
+        .filter(|procedure| reachable.contains(&procedure.definition_id))
+    {
         let Some(definition) = target.blocks.get(&procedure.definition_id) else {
             continue;
         };
@@ -287,14 +906,33 @@ pub(super) fn generate_resumable_script(
             .as_deref()
             .and_then(|id| procedure_graph.block_pcs.get(id).copied())
             .unwrap_or(usize::MAX);
+        let direct_path_name = direct_eligible(target, procedure)
+            .then(|| direct_name(target_index, procedure.frame_id));
+        let direct_warp_name = (no_warp_timer
+            && direct_path_name.is_none()
+            && direct_warp_eligibility
+                .get(&procedure.definition_id)
+                .copied()
+                .unwrap_or(false))
+        .then(|| direct_warp_name(target_index, procedure.frame_id));
         procedure_entries.insert(
             procedure.definition_id.clone(),
             ProcedureEntry {
                 function_id: procedure.frame_id,
                 start_pc: procedure_start,
                 repeat_count: procedure_graph.repeat_slots.len(),
-                direct_name: direct_eligible(target, procedure).then(|| direct_name(target_index, procedure.frame_id)),
-                numeric_direct: direct_eligible(target, procedure) && super::direct_numeric::generate_numeric_direct(target, procedure, variables, lists, &direct_name(target_index, procedure.frame_id), true).is_some(),
+                direct_name: direct_path_name,
+                direct_warp_name,
+                numeric_direct: direct_eligible(target, procedure)
+                    && super::direct_numeric::generate_numeric_direct(
+                        target,
+                        procedure,
+                        variables,
+                        lists,
+                        &direct_name(target_index, procedure.frame_id),
+                        true,
+                    )
+                    .is_some(),
             },
         );
         procedure_graphs.push((procedure, procedure_graph));
@@ -337,6 +975,7 @@ pub(super) fn generate_resumable_script(
                 &procedure_entries,
                 &mut emitted_blocks,
                 fast_math,
+                no_warp_timer,
                 output,
             ),
             ScriptNode::LoopBoundary(id) => {
@@ -346,7 +985,7 @@ pub(super) fn generate_resumable_script(
                     .and_then(|block| numeric_loop_plan(target, block, variables))
                     .is_none()
                 {
-                    generate_loop_boundary(target, id, &graph, output);
+                    generate_loop_boundary(target, id, &graph, no_warp_timer, output);
                 }
             }
         }
@@ -381,6 +1020,7 @@ pub(super) fn generate_resumable_script(
                     &procedure_entries,
                     &mut emitted_blocks,
                     fast_math,
+                    no_warp_timer,
                     output,
                 ),
                 ScriptNode::LoopBoundary(id) => {
@@ -390,7 +1030,7 @@ pub(super) fn generate_resumable_script(
                         .and_then(|block| numeric_loop_plan(target, block, variables))
                         .is_none()
                     {
-                        generate_loop_boundary(target, id, procedure_graph, output)
+                        generate_loop_boundary(target, id, procedure_graph, no_warp_timer, output)
                     }
                 }
             }
@@ -414,6 +1054,7 @@ fn generate_resumable_block(
     arguments: &HashMap<String, String>,
     procedures: &[ProcedureSignature],
     procedure_entries: &HashMap<String, ProcedureEntry>,
+    no_warp_timer: bool,
     output: &mut String,
 ) {
     let pc = graph.block_pcs[id];
@@ -496,8 +1137,18 @@ fn generate_resumable_block(
                     _ => None,
                 });
             let fused = generate_warp_repeat_list_append(
-                target, block, graph, variables, lists, arguments, &times, slot, next_pc, output,
+                target,
+                block,
+                graph,
+                variables,
+                lists,
+                arguments,
+                &times,
+                slot,
+                next_pc,
+                output,
                 indent,
+                no_warp_timer,
             );
             if !fused {
                 line(
@@ -827,6 +1478,7 @@ fn generate_resumable_block(
             arguments,
             procedures,
             procedure_entries,
+            no_warp_timer,
             output,
             indent + 1,
             true,
@@ -872,6 +1524,7 @@ fn generate_warp_repeat_list_append(
     next_pc: usize,
     output: &mut String,
     indent: usize,
+    no_warp_timer: bool,
 ) -> bool {
     let Some(InputValue::BlockReference(body_id)) =
         repeat.inputs.get("SUBSTACK").and_then(parse_input)
@@ -977,23 +1630,28 @@ fn generate_warp_repeat_list_append(
     line(
         output,
         indent + 3,
-        &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
-    );
-    line(
-        output,
-        indent + 3,
-        "if script.warp_budget.expired_now(clock) {",
-    );
-    line(
-        output,
-        indent + 4,
         &format!(
-            "script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 {{ {body_pc} }} else {{ {} }};",
-            pc_literal(next_pc)
+            "state.list_changed_result({}, scratch_list_changed);",
+            list.slot
         ),
     );
-    line(output, indent + 4, "return ScriptStatus::Yield;");
-    line(output, indent + 3, "}");
+    if !no_warp_timer {
+        line(
+            output,
+            indent + 3,
+            "if script.warp_budget.expired_now(clock) {",
+        );
+        line(
+            output,
+            indent + 4,
+            &format!(
+                "script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 {{ {body_pc} }} else {{ {} }};",
+                pc_literal(next_pc)
+            ),
+        );
+        line(output, indent + 4, "return ScriptStatus::Yield;");
+        line(output, indent + 3, "}");
+    }
     line(output, indent + 2, "}");
     line(
         output,
@@ -1047,28 +1705,105 @@ fn structured_loop_body(
 ) -> bool {
     let mut pending = vec![first];
     let mut seen = HashSet::new();
-    let mut has_direct_call = false;
     while let Some(id) = pending.pop() {
-        if !seen.insert(id) || seen.len() > 80 { return false; }
-        let Some(block) = target.blocks.get(id) else { return false };
+        if !seen.insert(id) || seen.len() > 80 {
+            return false;
+        }
+        let Some(block) = target.blocks.get(id) else {
+            return false;
+        };
         match block.opcode.as_str() {
             "control_if" | "control_if_else" => {
                 for name in ["SUBSTACK", "SUBSTACK2"] {
-                    if let Some(InputValue::BlockReference(branch)) = block.inputs.get(name).and_then(parse_input) { pending.push(branch); }
+                    if let Some(InputValue::BlockReference(branch)) =
+                        block.inputs.get(name).and_then(parse_input)
+                    {
+                        pending.push(branch);
+                    }
                 }
             }
             "procedures_call" => {
-                let Some(procedure) = procedure_for_call(block, procedures) else { return false };
-                if !entries.get(&procedure.definition_id).is_some_and(|entry| entry.direct_name.is_some()) { return false; }
-                has_direct_call = true;
+                let Some(procedure) = procedure_for_call(block, procedures) else {
+                    return false;
+                };
+                if !entries
+                    .get(&procedure.definition_id)
+                    .is_some_and(|entry| entry.direct_name.is_some())
+                {
+                    return false;
+                }
             }
-            "data_setvariableto" | "data_changevariableby" | "data_replaceitemoflist"
-            | "motion_gotoxy" | "pen_penDown" | "pen_penUp" => {},
+            "data_setvariableto"
+            | "data_changevariableby"
+            | "data_replaceitemoflist"
+            | "motion_gotoxy"
+            | "motion_setx"
+            | "motion_sety"
+            | "motion_changexby"
+            | "motion_changeyby"
+            | "pen_penDown"
+            | "pen_penUp"
+            | "pen_setPenColorToColor" => {}
             _ => return false,
         }
-        if let Some(next) = block.next.as_deref() { pending.push(next); }
+        if let Some(next) = block.next.as_deref() {
+            pending.push(next);
+        }
     }
-    has_direct_call
+    true
+}
+
+fn structured_sync_statement(opcode: &str) -> bool {
+    matches!(
+        opcode,
+        "data_setvariableto"
+            | "data_changevariableby"
+            | "data_replaceitemoflist"
+            | "motion_gotoxy"
+            | "motion_setx"
+            | "motion_sety"
+            | "motion_changexby"
+            | "motion_changeyby"
+            | "pen_penDown"
+            | "pen_penUp"
+            | "pen_setPenColorToColor"
+    )
+}
+
+// A partially structured region exits to the dispatcher at calls, loops,
+// stops, and any other operation whose effects or suspension are not known.
+// Every branch remains available, including empty and nested branches.
+fn partial_structured_body(target: &ScratchTarget, first: &str) -> bool {
+    let mut pending = vec![first];
+    let mut seen = HashSet::new();
+    let mut branch = false;
+    let mut synchronous = false;
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) || seen.len() > 300 {
+            return false;
+        }
+        let Some(block) = target.blocks.get(id) else {
+            return false;
+        };
+        if matches!(block.opcode.as_str(), "control_if" | "control_if_else") {
+            branch = true;
+            for name in ["SUBSTACK", "SUBSTACK2"] {
+                if let Some(InputValue::BlockReference(id)) =
+                    block.inputs.get(name).and_then(parse_input)
+                {
+                    pending.push(id);
+                }
+            }
+        } else if structured_sync_statement(&block.opcode) {
+            synchronous = true;
+        } else {
+            continue;
+        }
+        if let Some(next) = block.next.as_deref() {
+            pending.push(next);
+        }
+    }
+    branch && synchronous
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1079,40 +1814,1025 @@ struct CachedNumericItem {
     index_slots: HashSet<usize>,
 }
 
+// A canonical number has the same Scratch comparison text as the original
+// value. Restrict stores to constants whose representation is also canonical.
+fn canonical_constant(input: Option<&Value>) -> Option<String> {
+    match input.and_then(parse_input)? {
+        InputValue::Number(value) => Some(number_literal(value)),
+        InputValue::String(value) => {
+            let text = value.as_str()?;
+            let number = text.parse::<i32>().ok()?;
+            (number.unsigned_abs() <= 1_000_000 && number.to_string() == text)
+                .then(|| format!("{number}.0_f64"))
+        }
+        _ => None,
+    }
+}
+
+// These reporters always produce a Scratch Number, independently of the
+// types of their operands. Other reporters retain the dynamic path.
+fn definite_numeric_result(target: &ScratchTarget, input: Option<&Value>) -> bool {
+    match input.and_then(parse_input) {
+        Some(InputValue::Number(_)) => true,
+        Some(InputValue::BlockReference(id)) => target.blocks.get(id).is_some_and(|b| {
+            matches!(
+                b.opcode.as_str(),
+                "operator_add"
+                    | "operator_subtract"
+                    | "operator_multiply"
+                    | "operator_divide"
+                    | "operator_mod"
+                    | "operator_round"
+                    | "operator_mathop"
+                    | "operator_random"
+                    | "operator_length"
+                    | "data_lengthoflist"
+                    | "data_itemnumoflist"
+                    | "motion_xposition"
+                    | "motion_yposition"
+                    | "motion_direction"
+                    | "sound_volume"
+                    | "sensing_mousex"
+                    | "sensing_mousey"
+                    | "sensing_timer"
+                    | "sensing_dayssince2000"
+                    | "sensing_loudness"
+            )
+        }),
+        _ => false,
+    }
+}
+
+fn emit_typed_numeric_set(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variable: &VariableInfo,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    deferred: &HashSet<usize>,
+    textual: &HashSet<usize>,
+    output: &mut String,
+    indent: usize,
+) {
+    let value = expression(
+        target,
+        block.inputs.get("VALUE"),
+        variables,
+        lists,
+        arguments,
+        &mut HashSet::new(),
+    );
+    line(
+        output,
+        indent,
+        &format!("scratch_typed_{} = {value};", variable.slot),
+    );
+    if deferred.contains(&variable.slot) {
+        line(
+            output,
+            indent,
+            &format!("scratch_dirty_{} = true;", variable.slot),
+        );
+        if textual.contains(&variable.slot) {
+            line(
+                output,
+                indent,
+                &format!("scratch_text_{} = false;", variable.slot),
+            );
+        }
+    } else {
+        let setter = if variable.is_stage {
+            "set_shared_number"
+        } else {
+            "set_local_number"
+        };
+        line(
+            output,
+            indent,
+            &format!("state.{setter}({0}, scratch_typed_{0});", variable.slot),
+        );
+    }
+}
+
+// Track uses which require the original ScratchValue representation. A
+// numeric operand is equivalent to a canonical Number or numeric string;
+// direct copies and other unknown consumers must keep the original value.
+fn collect_unsafe_numeric_reads(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, VariableInfo>,
+    numeric_context: bool,
+    reads: &mut HashMap<usize, VariableInfo>,
+    unsafe_slots: &mut HashSet<usize>,
+    active: &mut HashSet<String>,
+) {
+    match input.and_then(parse_input) {
+        Some(InputValue::VariableReference(reference)) => {
+            if let Some(variable) = variables.get(reference.id) {
+                reads.insert(variable.slot, variable.clone());
+                if !numeric_context {
+                    unsafe_slots.insert(variable.slot);
+                }
+            }
+        }
+        Some(InputValue::BlockReference(id)) if active.insert(id.to_owned()) => {
+            if let Some(block) = target.blocks.get(id) {
+                if block.opcode == "data_variable" {
+                    if let Some(variable) = variable_field(block, "VARIABLE", variables) {
+                        if !numeric_context {
+                            unsafe_slots.insert(variable.slot);
+                        }
+                        reads.insert(variable.slot, variable);
+                    }
+                }
+                let numeric_operator = matches!(
+                    block.opcode.as_str(),
+                    "operator_add"
+                        | "operator_subtract"
+                        | "operator_multiply"
+                        | "operator_divide"
+                        | "operator_mod"
+                        | "operator_round"
+                        | "operator_mathop"
+                        | "operator_equals"
+                        | "operator_lt"
+                        | "operator_gt"
+                        | "operator_not"
+                        | "operator_and"
+                        | "operator_or"
+                );
+                for (name, child) in &block.inputs {
+                    let safe =
+                        numeric_operator || (block.opcode == "data_itemoflist" && name == "INDEX");
+                    collect_unsafe_numeric_reads(
+                        target,
+                        Some(child),
+                        variables,
+                        safe,
+                        reads,
+                        unsafe_slots,
+                        active,
+                    );
+                }
+            }
+            active.remove(id);
+        }
+        _ => {}
+    }
+}
+
+// Find values which stay canonical on every branch and on the loop backedge.
+// Calls are excluded: a callee can change any variable or suspend execution.
+fn structured_numeric_locals(
+    target: &ScratchTarget,
+    first: &str,
+    variables: &HashMap<String, VariableInfo>,
+    include_branches: bool,
+    stop_at_unsupported: bool,
+) -> (Vec<VariableInfo>, HashSet<usize>, HashSet<usize>) {
+    let mut pending = vec![first];
+    let mut seen = HashSet::new();
+    let mut candidates = HashMap::new();
+    let mut unsafe_slots = HashSet::new();
+    let mut textual = HashSet::new();
+    let mut changed = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(block) = target.blocks.get(id) else {
+            return (Vec::new(), HashSet::new(), HashSet::new());
+        };
+        if stop_at_unsupported
+            && !structured_sync_statement(&block.opcode)
+            && !matches!(block.opcode.as_str(), "control_if" | "control_if_else")
+        {
+            continue;
+        }
+        if block.opcode == "procedures_call" {
+            return (Vec::new(), HashSet::new(), HashSet::new());
+        }
+        if matches!(
+            block.opcode.as_str(),
+            "data_setvariableto" | "data_changevariableby"
+        ) {
+            let Some(variable) = variable_field(block, "VARIABLE", variables) else {
+                return (Vec::new(), HashSet::new(), HashSet::new());
+            };
+            if block.opcode == "data_setvariableto" {
+                changed.insert(variable.slot);
+                if matches!(
+                    block.inputs.get("VALUE").and_then(parse_input),
+                    Some(InputValue::String(_))
+                ) {
+                    textual.insert(variable.slot);
+                }
+            }
+            if block.opcode == "data_changevariableby" {
+                changed.insert(variable.slot);
+            }
+            if block.opcode == "data_setvariableto"
+                && !definite_numeric_result(target, block.inputs.get("VALUE"))
+                && canonical_constant(block.inputs.get("VALUE")).is_none()
+            {
+                unsafe_slots.insert(variable.slot);
+            }
+            candidates.insert(variable.slot, variable);
+        }
+        for (name, input) in &block.inputs {
+            if matches!(name.as_str(), "SUBSTACK" | "SUBSTACK2") {
+                if include_branches {
+                    if let Some(InputValue::BlockReference(branch)) = parse_input(input) {
+                        pending.push(branch);
+                    }
+                }
+                continue;
+            }
+            let safe = matches!(
+                block.opcode.as_str(),
+                "control_if"
+                    | "control_if_else"
+                    | "data_changevariableby"
+                    | "motion_gotoxy"
+                    | "motion_setx"
+                    | "motion_sety"
+                    | "motion_changexby"
+                    | "motion_changeyby"
+                    | "data_replaceitemoflist"
+            );
+            collect_unsafe_numeric_reads(
+                target,
+                Some(input),
+                variables,
+                safe,
+                &mut candidates,
+                &mut unsafe_slots,
+                &mut HashSet::new(),
+            );
+        }
+        if let Some(next) = block.next.as_deref() {
+            pending.push(next);
+        }
+    }
+    let mut result = candidates
+        .into_values()
+        .filter(|v| !unsafe_slots.contains(&v.slot))
+        .collect::<Vec<_>>();
+    result.sort_by_key(|v| v.slot);
+    let deferred = result
+        .iter()
+        .filter(|v| changed.contains(&v.slot))
+        .map(|v| v.slot)
+        .collect();
+    (result, deferred, textual)
+}
+
+fn emit_deferred_numeric_commits(
+    output: &mut String,
+    indent: usize,
+    numeric: &[VariableInfo],
+    deferred: &HashSet<usize>,
+    textual: &HashSet<usize>,
+) {
+    for variable in numeric.iter().filter(|v| deferred.contains(&v.slot)) {
+        let setter = if variable.is_stage {
+            "set_shared_number"
+        } else {
+            "set_local_number"
+        };
+        if textual.contains(&variable.slot) {
+            let string_setter = if variable.is_stage {
+                "set_shared"
+            } else {
+                "set_local_value"
+            };
+            line(
+                output,
+                indent,
+                &format!(
+                    "if scratch_dirty_{0} {{ if scratch_text_{0} {{ state.{string_setter}({0}, ScratchValue::Text(scratch_string(scratch_typed_{0}))); }} else {{ state.{setter}({0}, scratch_typed_{0}); }} }}",
+                    variable.slot
+                ),
+            );
+        } else {
+            line(
+                output,
+                indent,
+                &format!(
+                    "if scratch_dirty_{0} {{ state.{setter}({0}, scratch_typed_{0}); }}",
+                    variable.slot
+                ),
+            );
+        }
+    }
+}
+
+// Infer number-only straight-line regions separately from loop analysis, so
+// arithmetic results can stay in native locals across successive statements.
+fn straight_numeric_region<'a>(
+    target: &'a ScratchTarget,
+    first: &'a str,
+    variables: &HashMap<String, VariableInfo>,
+) -> Option<(
+    Vec<&'a str>,
+    Vec<VariableInfo>,
+    HashSet<usize>,
+    HashSet<usize>,
+)> {
+    let mut ids = Vec::new();
+    let mut candidates = HashMap::new();
+    let mut unsafe_slots = HashSet::new();
+    let mut written = HashSet::new();
+    let mut needed = HashSet::new();
+    let mut current = Some(first);
+    while let Some(id) = current {
+        let block = target.blocks.get(id)?;
+        if !matches!(
+            block.opcode.as_str(),
+            "data_setvariableto" | "data_changevariableby"
+        ) || (block.opcode == "data_setvariableto"
+            && !definite_numeric_result(target, block.inputs.get("VALUE")))
+        {
+            break;
+        }
+        if ids.contains(&id) || ids.len() >= 200 {
+            return None;
+        }
+        let variable = variable_field(block, "VARIABLE", variables)?;
+        let mut reads = HashSet::new();
+        collect_input_slots(
+            target,
+            block.inputs.get("VALUE"),
+            variables,
+            &mut reads,
+            &mut HashSet::new(),
+        );
+        needed.extend(reads.difference(&written).copied());
+        if block.opcode == "data_changevariableby" && !written.contains(&variable.slot) {
+            needed.insert(variable.slot);
+        }
+        collect_unsafe_numeric_reads(
+            target,
+            block.inputs.get("VALUE"),
+            variables,
+            block.opcode == "data_changevariableby",
+            &mut candidates,
+            &mut unsafe_slots,
+            &mut HashSet::new(),
+        );
+        written.insert(variable.slot);
+        candidates.insert(variable.slot, variable);
+        ids.push(id);
+        current = block.next.as_deref();
+    }
+    if ids.len() < 4 {
+        return None;
+    }
+    let mut numeric = candidates
+        .into_values()
+        .filter(|v| !unsafe_slots.contains(&v.slot))
+        .collect::<Vec<_>>();
+    numeric.sort_by_key(|v| v.slot);
+    let deferred = numeric
+        .iter()
+        .filter(|v| written.contains(&v.slot))
+        .map(|v| v.slot)
+        .collect::<HashSet<_>>();
+    (!deferred.is_empty()).then_some((ids, numeric, deferred, needed))
+}
+
+fn emit_deferred_numeric_flush(
+    output: &mut String,
+    indent: usize,
+    variables: &HashMap<String, VariableInfo>,
+    deferred: &HashSet<usize>,
+    textual: &HashSet<usize>,
+) {
+    let mut slots = deferred.iter().copied().collect::<Vec<_>>();
+    slots.sort_unstable();
+    for slot in slots {
+        if let Some(variable) = variables.values().find(|v| v.slot == slot) {
+            let setter = if variable.is_stage {
+                "set_shared_number"
+            } else {
+                "set_local_number"
+            };
+            if textual.contains(&slot) {
+                let string_setter = if variable.is_stage {
+                    "set_shared"
+                } else {
+                    "set_local_value"
+                };
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "if scratch_dirty_{slot} {{ if scratch_text_{slot} {{ state.{string_setter}({slot}, ScratchValue::Text(scratch_string(scratch_typed_{slot}))); }} else {{ state.{setter}({slot}, scratch_typed_{slot}); }} scratch_dirty_{slot} = false; }}"
+                    ),
+                );
+            } else {
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "if scratch_dirty_{slot} {{ state.{setter}({slot}, scratch_typed_{slot}); scratch_dirty_{slot} = false; }}"
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn collect_input_slots(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, VariableInfo>,
+    slots: &mut HashSet<usize>,
+    active: &mut HashSet<String>,
+) {
+    match input.and_then(parse_input) {
+        Some(InputValue::VariableReference(reference)) => {
+            if let Some(variable) = variables.get(reference.id) {
+                slots.insert(variable.slot);
+            }
+        }
+        Some(InputValue::BlockReference(id)) if active.insert(id.to_owned()) => {
+            if let Some(block) = target.blocks.get(id) {
+                if block.opcode == "data_variable" {
+                    if let Some(variable) = variable_field(block, "VARIABLE", variables) {
+                        slots.insert(variable.slot);
+                    }
+                }
+                for child in block.inputs.values() {
+                    collect_input_slots(target, Some(child), variables, slots, active);
+                }
+            }
+            active.remove(id);
+        }
+        _ => {}
+    }
+}
+
+// Preserve the exact ScratchValue for mutable locals whose type is not proven.
+// This avoids repeatedly looking them up and writing them to shared state in
+// a synchronous region; all writes are still flushed at its exit.
+fn structured_dynamic_locals(
+    target: &ScratchTarget,
+    first: &str,
+    variables: &HashMap<String, VariableInfo>,
+    numeric: &HashSet<usize>,
+) -> Vec<VariableInfo> {
+    let mut pending = vec![first];
+    let mut seen = HashSet::new();
+    let mut writes = HashMap::new();
+    let mut changed = HashSet::new();
+    let mut reads = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(block) = target.blocks.get(id) else {
+            return Vec::new();
+        };
+        if block.opcode == "procedures_call" {
+            return Vec::new();
+        }
+        if let Some(variable) = variable_field(block, "VARIABLE", variables) {
+            if block.opcode == "data_setvariableto" {
+                writes.insert(variable.slot, variable.clone());
+            }
+            if block.opcode == "data_changevariableby" {
+                changed.insert(variable.slot);
+            }
+        }
+        for (name, input) in &block.inputs {
+            if matches!(name.as_str(), "SUBSTACK" | "SUBSTACK2") {
+                if let Some(InputValue::BlockReference(branch)) = parse_input(input) {
+                    pending.push(branch);
+                }
+            } else {
+                collect_input_slots(
+                    target,
+                    Some(input),
+                    variables,
+                    &mut reads,
+                    &mut HashSet::new(),
+                );
+            }
+        }
+        if let Some(next) = block.next.as_deref() {
+            pending.push(next);
+        }
+    }
+    let mut result = writes
+        .into_values()
+        .filter(|v| {
+            reads.contains(&v.slot) && !numeric.contains(&v.slot) && !changed.contains(&v.slot)
+        })
+        .collect::<Vec<_>>();
+    result.sort_by_key(|v| v.slot);
+    result
+}
+
+fn emit_deferred_dynamic_commits(
+    output: &mut String,
+    indent: usize,
+    dynamic: &[VariableInfo],
+    clear: bool,
+) {
+    for variable in dynamic {
+        let setter = if variable.is_stage {
+            "set_shared"
+        } else {
+            "set_local_value"
+        };
+        let reset = if clear {
+            format!(" scratch_dynamic_dirty_{} = false;", variable.slot)
+        } else {
+            String::new()
+        };
+        line(
+            output,
+            indent,
+            &format!(
+                "if scratch_dynamic_dirty_{0} {{ state.{setter}({0}, scratch_dynamic_{0}.clone());{reset} }}",
+                variable.slot
+            ),
+        );
+    }
+}
+
+// Determine which locals must be loaded on entry. At a branch merge a write
+// is definite only if it happened along every path which continues. A region
+// exit has no successor here: its state is committed before dispatch resumes.
+fn collect_region_entry_reads<'a>(
+    target: &'a ScratchTarget,
+    mut id: Option<&'a str>,
+    variables: &HashMap<String, VariableInfo>,
+    written: &mut HashSet<usize>,
+    needed: &mut HashSet<usize>,
+    partial: bool,
+) -> bool {
+    while let Some(current) = id {
+        let Some(block) = target.blocks.get(current) else {
+            return false;
+        };
+        if partial
+            && !structured_sync_statement(&block.opcode)
+            && !matches!(block.opcode.as_str(), "control_if" | "control_if_else")
+        {
+            return false;
+        }
+        for (name, input) in &block.inputs {
+            if matches!(name.as_str(), "SUBSTACK" | "SUBSTACK2") {
+                continue;
+            }
+            let mut reads = HashSet::new();
+            collect_input_slots(
+                target,
+                Some(input),
+                variables,
+                &mut reads,
+                &mut HashSet::new(),
+            );
+            needed.extend(reads.difference(written).copied());
+        }
+        if matches!(block.opcode.as_str(), "control_if" | "control_if_else") {
+            let branch = |name| {
+                block
+                    .inputs
+                    .get(name)
+                    .and_then(parse_input)
+                    .and_then(|v| match v {
+                        InputValue::BlockReference(id) => Some(id),
+                        _ => None,
+                    })
+            };
+            let mut yes = written.clone();
+            let yes_continues = collect_region_entry_reads(
+                target,
+                branch("SUBSTACK"),
+                variables,
+                &mut yes,
+                needed,
+                partial,
+            );
+            let mut no = written.clone();
+            let no_continues = if block.opcode == "control_if_else" {
+                collect_region_entry_reads(
+                    target,
+                    branch("SUBSTACK2"),
+                    variables,
+                    &mut no,
+                    needed,
+                    partial,
+                )
+            } else {
+                true
+            };
+            match (yes_continues, no_continues) {
+                (true, true) => *written = yes.intersection(&no).copied().collect(),
+                (true, false) => *written = yes,
+                (false, true) => *written = no,
+                (false, false) => return false,
+            }
+        } else if let Some(variable) = variable_field(block, "VARIABLE", variables) {
+            if block.opcode == "data_changevariableby" && !written.contains(&variable.slot) {
+                needed.insert(variable.slot);
+            }
+            if matches!(
+                block.opcode.as_str(),
+                "data_setvariableto" | "data_changevariableby"
+            ) {
+                written.insert(variable.slot);
+            }
+        }
+        id = block.next.as_deref();
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_partial_structured_chain<'a>(
+    target: &'a ScratchTarget,
+    mut id: Option<&'a str>,
+    graph: &ScriptGraph,
+    variables: &HashMap<String, VariableInfo>,
+    original_variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    numeric: &HashSet<usize>,
+    deferred: &HashSet<usize>,
+    textual: &HashSet<usize>,
+    procedures: &[ProcedureSignature],
+    entries: &HashMap<String, ProcedureEntry>,
+    no_warp_timer: bool,
+    repeat_slot: Option<usize>,
+    output: &mut String,
+    indent: usize,
+) {
+    while let Some(current) = id {
+        let block = &target.blocks[current];
+        if matches!(block.opcode.as_str(), "control_if" | "control_if_else") {
+            let condition = boolean_input(
+                target,
+                block,
+                "CONDITION",
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            let branch = |name| {
+                block
+                    .inputs
+                    .get(name)
+                    .and_then(parse_input)
+                    .and_then(|v| match v {
+                        InputValue::BlockReference(id) => Some(id),
+                        _ => None,
+                    })
+            };
+            line(output, indent, &format!("if {condition} {{"));
+            emit_partial_structured_chain(
+                target,
+                branch("SUBSTACK"),
+                graph,
+                variables,
+                original_variables,
+                lists,
+                arguments,
+                numeric,
+                deferred,
+                textual,
+                procedures,
+                entries,
+                no_warp_timer,
+                repeat_slot,
+                output,
+                indent + 1,
+            );
+            if block.opcode == "control_if_else" {
+                line(output, indent, "} else {");
+                emit_partial_structured_chain(
+                    target,
+                    branch("SUBSTACK2"),
+                    graph,
+                    variables,
+                    original_variables,
+                    lists,
+                    arguments,
+                    numeric,
+                    deferred,
+                    textual,
+                    procedures,
+                    entries,
+                    no_warp_timer,
+                    repeat_slot,
+                    output,
+                    indent + 1,
+                );
+            }
+            line(output, indent, "}");
+        } else if structured_sync_statement(&block.opcode) {
+            let variable = variable_field(block, "VARIABLE", variables);
+            let deferred_change = block.opcode == "data_changevariableby"
+                && variable
+                    .as_ref()
+                    .is_some_and(|v| deferred.contains(&v.slot));
+            let typed_set = block.opcode == "data_setvariableto"
+                && variable.as_ref().is_some_and(|v| numeric.contains(&v.slot))
+                && definite_numeric_result(target, block.inputs.get("VALUE"));
+            let typed_text_set = block.opcode == "data_setvariableto"
+                && variable
+                    .as_ref()
+                    .is_some_and(|v| deferred.contains(&v.slot) && textual.contains(&v.slot))
+                && canonical_constant(block.inputs.get("VALUE")).is_some()
+                && !typed_set;
+            if deferred_change {
+                let value = expression(
+                    target,
+                    block.inputs.get("VALUE"),
+                    variables,
+                    lists,
+                    arguments,
+                    &mut HashSet::new(),
+                );
+                line(
+                    output,
+                    indent,
+                    &format!("let scratch_change = scratch_to_number({value});"),
+                );
+            } else if typed_set {
+                emit_typed_numeric_set(
+                    target,
+                    block,
+                    variable.as_ref().unwrap(),
+                    variables,
+                    lists,
+                    arguments,
+                    deferred,
+                    textual,
+                    output,
+                    indent,
+                );
+            } else if typed_text_set {
+                let variable = variable.as_ref().unwrap();
+                let value = canonical_constant(block.inputs.get("VALUE")).unwrap();
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "scratch_typed_{0} = {value}; scratch_text_{0} = true; scratch_dirty_{0} = true;",
+                        variable.slot
+                    ),
+                );
+            } else if block.opcode == "data_replaceitemoflist" && !numeric.is_empty() {
+                emit_deferred_numeric_flush(output, indent, original_variables, deferred, textual);
+                let next = block
+                    .next
+                    .as_ref()
+                    .and_then(|id| graph.block_pcs.get(id).copied())
+                    .unwrap_or(graph.fallthrough_pcs[current]);
+                generate_resumable_statement(
+                    target,
+                    block,
+                    next,
+                    original_variables,
+                    lists,
+                    arguments,
+                    output,
+                    indent,
+                );
+            } else {
+                let next = block
+                    .next
+                    .as_ref()
+                    .and_then(|id| graph.block_pcs.get(id).copied())
+                    .unwrap_or(graph.fallthrough_pcs[current]);
+                generate_resumable_statement(
+                    target, block, next, variables, lists, arguments, output, indent,
+                );
+            }
+            if let Some(variable) = variable.filter(|v| numeric.contains(&v.slot)) {
+                match block.opcode.as_str() {
+                    "data_changevariableby" => {
+                        line(
+                            output,
+                            indent,
+                            &format!(
+                                "scratch_typed_{0} = scratch_number_operand(scratch_typed_{0}) + scratch_change;",
+                                variable.slot
+                            ),
+                        );
+                        if deferred_change {
+                            line(
+                                output,
+                                indent,
+                                &format!("scratch_dirty_{} = true;", variable.slot),
+                            );
+                        }
+                        if deferred_change && textual.contains(&variable.slot) {
+                            line(
+                                output,
+                                indent,
+                                &format!("scratch_text_{} = false;", variable.slot),
+                            );
+                        }
+                    }
+                    "data_setvariableto" => {
+                        if !typed_set && !typed_text_set {
+                            let value = canonical_constant(block.inputs.get("VALUE"))
+                                .expect("canonical store was analyzed");
+                            line(
+                                output,
+                                indent,
+                                &format!("scratch_typed_{} = {value};", variable.slot),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else if block.opcode == "procedures_call"
+            && procedure_for_call(block, procedures)
+                .and_then(|p| entries.get(&p.definition_id))
+                .is_some_and(|entry| entry.direct_name.is_some())
+        {
+            emit_deferred_numeric_flush(output, indent, original_variables, deferred, textual);
+            if let Some(slot) = repeat_slot {
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "script.frames.last_mut().unwrap().repeat_counts[{slot}] = repeat_remaining;"
+                    ),
+                );
+            }
+            let next = block
+                .next
+                .as_ref()
+                .and_then(|id| graph.block_pcs.get(id).copied())
+                .unwrap_or(graph.fallthrough_pcs[current]);
+            generate_resumable_procedure_call(
+                target,
+                block,
+                next,
+                original_variables,
+                lists,
+                arguments,
+                procedures,
+                entries,
+                no_warp_timer,
+                output,
+                indent,
+                false,
+                None,
+                None,
+            );
+            line(output, indent, "scratch_region_escaped = true;");
+            line(output, indent, "break 'scratch_compiled_loop;");
+            return;
+        } else {
+            line(
+                output,
+                indent,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = {};",
+                    graph.block_pcs[current]
+                ),
+            );
+            line(output, indent, "scratch_region_escaped = true;");
+            line(output, indent, "break 'scratch_compiled_loop;");
+            return;
+        }
+        id = block.next.as_deref();
+    }
+}
+
 fn emit_structured_loop_chain<'a>(
-    target: &'a ScratchTarget, mut current: Option<&'a str>, graph: &ScriptGraph,
-    variables: &HashMap<String, VariableInfo>, lists: &HashMap<String, ListInfo>,
-    arguments: &HashMap<String, String>, procedures: &[ProcedureSignature],
-    entries: &HashMap<String, ProcedureEntry>, output: &mut String, indent: usize,
+    target: &'a ScratchTarget,
+    mut current: Option<&'a str>,
+    graph: &ScriptGraph,
+    variables: &HashMap<String, VariableInfo>,
+    original_variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    procedures: &[ProcedureSignature],
+    entries: &HashMap<String, ProcedureEntry>,
+    no_warp_timer: bool,
+    output: &mut String,
+    indent: usize,
     cached_indexes: &mut HashSet<usize>,
     cached_items: &mut HashMap<String, CachedNumericItem>,
+    numeric_locals: &HashSet<usize>,
+    deferred: &HashSet<usize>,
+    textual: &HashSet<usize>,
+    dynamic: &[VariableInfo],
 ) {
     while let Some(id) = current {
         let block = &target.blocks[id];
-        let next_pc = block.next.as_ref().and_then(|next| graph.block_pcs.get(next).copied()).unwrap_or(graph.fallthrough_pcs[id]);
+        let next_pc = block
+            .next
+            .as_ref()
+            .and_then(|next| graph.block_pcs.get(next).copied())
+            .unwrap_or(graph.fallthrough_pcs[id]);
         match block.opcode.as_str() {
             "control_if" | "control_if_else" => {
-                let condition = boolean_input(target, block, "CONDITION", variables, lists, arguments, &mut HashSet::new());
+                let condition = boolean_input(
+                    target,
+                    block,
+                    "CONDITION",
+                    variables,
+                    lists,
+                    arguments,
+                    &mut HashSet::new(),
+                );
                 line(output, indent, &format!("if {condition} {{"));
-                let branch = |name| block.inputs.get(name).and_then(parse_input).and_then(|value| match value { InputValue::BlockReference(id) => Some(id), _ => None });
+                let branch = |name| {
+                    block
+                        .inputs
+                        .get(name)
+                        .and_then(parse_input)
+                        .and_then(|value| match value {
+                            InputValue::BlockReference(id) => Some(id),
+                            _ => None,
+                        })
+                };
                 let mut yes = cached_indexes.clone();
                 let mut yes_items = cached_items.clone();
-                emit_structured_loop_chain(target, branch("SUBSTACK"), graph, variables, lists, arguments, procedures, entries, output, indent + 1, &mut yes, &mut yes_items);
+                emit_structured_loop_chain(
+                    target,
+                    branch("SUBSTACK"),
+                    graph,
+                    variables,
+                    original_variables,
+                    lists,
+                    arguments,
+                    procedures,
+                    entries,
+                    no_warp_timer,
+                    output,
+                    indent + 1,
+                    &mut yes,
+                    &mut yes_items,
+                    numeric_locals,
+                    deferred,
+                    textual,
+                    dynamic,
+                );
                 let mut no = cached_indexes.clone();
                 let mut no_items = cached_items.clone();
                 if block.opcode == "control_if_else" {
                     line(output, indent, "} else {");
-                    emit_structured_loop_chain(target, branch("SUBSTACK2"), graph, variables, lists, arguments, procedures, entries, output, indent + 1, &mut no, &mut no_items);
+                    emit_structured_loop_chain(
+                        target,
+                        branch("SUBSTACK2"),
+                        graph,
+                        variables,
+                        original_variables,
+                        lists,
+                        arguments,
+                        procedures,
+                        entries,
+                        no_warp_timer,
+                        output,
+                        indent + 1,
+                        &mut no,
+                        &mut no_items,
+                        numeric_locals,
+                        deferred,
+                        textual,
+                        dynamic,
+                    );
                 }
                 cached_indexes.retain(|slot| yes.contains(slot) && no.contains(slot));
-                cached_items.retain(|key, _| yes_items.contains_key(key) && no_items.contains_key(key));
+                cached_items
+                    .retain(|key, _| yes_items.contains_key(key) && no_items.contains_key(key));
                 line(output, indent, "}");
             }
             "procedures_call" => {
                 let procedure = procedure_for_call(block, procedures).unwrap();
                 let entry = &entries[&procedure.definition_id];
-                let (_, slots) = cached_procedure_indexes(target, block, procedure, entry, variables);
-                generate_resumable_procedure_call(target, block, next_pc, variables, lists, arguments, procedures, entries, output, indent, false, Some(cached_indexes), Some(cached_items));
+                let (_, slots) =
+                    cached_procedure_indexes(target, block, procedure, entry, variables);
+                generate_resumable_procedure_call(
+                    target,
+                    block,
+                    next_pc,
+                    variables,
+                    lists,
+                    arguments,
+                    procedures,
+                    entries,
+                    no_warp_timer,
+                    output,
+                    indent,
+                    false,
+                    Some(cached_indexes),
+                    Some(cached_items),
+                );
                 cached_indexes.extend(slots);
                 let definition = &target.blocks[&procedure.definition_id];
                 let mut body = ScriptGraph::new();
@@ -1120,52 +2840,264 @@ fn emit_structured_loop_chain<'a>(
                 for node in body.nodes {
                     if let ScriptNode::Block(body_id) = node {
                         let statement = &target.blocks[&body_id];
-                        if matches!(statement.opcode.as_str(), "data_setvariableto" | "data_changevariableby") {
-                            if let Some(variable) = variable_field(statement, "VARIABLE", variables) { cached_indexes.remove(&variable.slot); cached_items.retain(|_, item| !item.index_slots.contains(&variable.slot)); }
+                        if matches!(
+                            statement.opcode.as_str(),
+                            "data_setvariableto" | "data_changevariableby"
+                        ) {
+                            if let Some(variable) = variable_field(statement, "VARIABLE", variables)
+                            {
+                                cached_indexes.remove(&variable.slot);
+                                cached_items
+                                    .retain(|_, item| !item.index_slots.contains(&variable.slot));
+                            }
                         }
-                        if matches!(statement.opcode.as_str(), "data_addtolist" | "data_deleteoflist" | "data_deletealloflist" | "data_insertatlist" | "data_replaceitemoflist") {
-                            if let Some(list) = list_field(statement, "LIST", lists) { cached_items.retain(|_, item| item.list_slot != list.slot); } else { cached_items.clear(); }
+                        if matches!(
+                            statement.opcode.as_str(),
+                            "data_addtolist"
+                                | "data_deleteoflist"
+                                | "data_deletealloflist"
+                                | "data_insertatlist"
+                                | "data_replaceitemoflist"
+                        ) {
+                            if let Some(list) = list_field(statement, "LIST", lists) {
+                                cached_items.retain(|_, item| item.list_slot != list.slot);
+                            } else {
+                                cached_items.clear();
+                            }
                         }
                     }
                 }
             }
             "data_setvariableto" => {
-                if let Some(slot) = emit_shared_list_copy(target, block, variables, lists, arguments, output, indent) {
+                let numeric_target = variable_field(block, "VARIABLE", variables)
+                    .filter(|v| numeric_locals.contains(&v.slot));
+                let dynamic_target = variable_field(block, "VARIABLE", variables)
+                    .filter(|v| dynamic.iter().any(|d| d.slot == v.slot));
+                if let Some(variable) = dynamic_target {
+                    let value = expression(
+                        target,
+                        block.inputs.get("VALUE"),
+                        variables,
+                        lists,
+                        arguments,
+                        &mut HashSet::new(),
+                    );
+                    line(
+                        output,
+                        indent,
+                        &format!(
+                            "let scratch_new_value: ScratchValue = ({value}).to_owned().into();"
+                        ),
+                    );
+                    line(
+                        output,
+                        indent,
+                        &format!(
+                            "scratch_dynamic_{0} = scratch_new_value; scratch_dynamic_dirty_{0} = true;",
+                            variable.slot
+                        ),
+                    );
+                    cached_items.retain(|_, item| !item.index_slots.contains(&variable.slot));
+                    cached_indexes.remove(&variable.slot);
+                } else if let Some(variable) = numeric_target
+                    .filter(|_| definite_numeric_result(target, block.inputs.get("VALUE")))
+                {
+                    emit_typed_numeric_set(
+                        target, block, &variable, variables, lists, arguments, deferred, textual,
+                        output, indent,
+                    );
+                    cached_items.retain(|_, item| !item.index_slots.contains(&variable.slot));
+                    cached_indexes.remove(&variable.slot);
+                } else if let Some(variable) =
+                    variable_field(block, "VARIABLE", variables).filter(|v| {
+                        deferred.contains(&v.slot)
+                            && textual.contains(&v.slot)
+                            && canonical_constant(block.inputs.get("VALUE")).is_some()
+                    })
+                {
+                    let value = canonical_constant(block.inputs.get("VALUE")).unwrap();
+                    line(
+                        output,
+                        indent,
+                        &format!(
+                            "scratch_typed_{0} = {value}; scratch_text_{0} = true; scratch_dirty_{0} = true;",
+                            variable.slot
+                        ),
+                    );
+                    cached_items.retain(|_, item| !item.index_slots.contains(&variable.slot));
+                    cached_indexes.remove(&variable.slot);
+                } else if let Some(slot) = emit_shared_list_copy(
+                    target, block, variables, lists, arguments, output, indent,
+                ) {
                     cached_items.retain(|_, item| !item.index_slots.contains(&slot));
                     cached_indexes.insert(slot);
                 } else {
-                    generate_resumable_statement(target, block, next_pc, variables, lists, arguments, output, indent);
-                    if let Some(variable) = variable_field(block, "VARIABLE", variables) { cached_indexes.remove(&variable.slot); cached_items.retain(|_, item| !item.index_slots.contains(&variable.slot)); }
+                    generate_resumable_statement(
+                        target, block, next_pc, variables, lists, arguments, output, indent,
+                    );
+                    if let Some(variable) = variable_field(block, "VARIABLE", variables)
+                        .filter(|v| numeric_locals.contains(&v.slot))
+                    {
+                        let value = canonical_constant(block.inputs.get("VALUE"))
+                            .expect("canonical store was analyzed");
+                        line(
+                            output,
+                            indent,
+                            &format!("scratch_typed_{} = {value};", variable.slot),
+                        );
+                    }
+                    if let Some(variable) = variable_field(block, "VARIABLE", variables) {
+                        cached_indexes.remove(&variable.slot);
+                        cached_items.retain(|_, item| !item.index_slots.contains(&variable.slot));
+                    }
                 }
             }
             _ => {
-                generate_resumable_statement(target, block, next_pc, variables, lists, arguments, output, indent);
+                let deferred_change = block.opcode == "data_changevariableby"
+                    && variable_field(block, "VARIABLE", variables)
+                        .is_some_and(|v| deferred.contains(&v.slot));
+                if deferred_change {
+                    let value = expression(
+                        target,
+                        block.inputs.get("VALUE"),
+                        variables,
+                        lists,
+                        arguments,
+                        &mut HashSet::new(),
+                    );
+                    line(
+                        output,
+                        indent,
+                        &format!("let scratch_change = scratch_to_number({value});"),
+                    );
+                } else if block.opcode == "data_replaceitemoflist"
+                    && (!numeric_locals.is_empty() || !dynamic.is_empty())
+                {
+                    // This operation consumes authoritative ScratchValue inputs.
+                    // Commit pending locals and use the existing lowering unchanged.
+                    emit_deferred_numeric_flush(
+                        output,
+                        indent,
+                        original_variables,
+                        deferred,
+                        textual,
+                    );
+                    emit_deferred_dynamic_commits(output, indent, dynamic, true);
+                    generate_resumable_statement(
+                        target,
+                        block,
+                        next_pc,
+                        original_variables,
+                        lists,
+                        arguments,
+                        output,
+                        indent,
+                    );
+                } else {
+                    generate_resumable_statement(
+                        target, block, next_pc, variables, lists, arguments, output, indent,
+                    );
+                }
                 if block.opcode == "data_changevariableby" {
-                    if let Some(variable) = variable_field(block, "VARIABLE", variables) { cached_indexes.remove(&variable.slot); cached_items.retain(|_, item| !item.index_slots.contains(&variable.slot)); }
+                    if let Some(variable) = variable_field(block, "VARIABLE", variables)
+                        .filter(|v| numeric_locals.contains(&v.slot))
+                    {
+                        line(
+                            output,
+                            indent,
+                            &format!(
+                                "scratch_typed_{0} = scratch_number_operand(scratch_typed_{0}) + scratch_change;",
+                                variable.slot
+                            ),
+                        );
+                        if deferred_change {
+                            line(
+                                output,
+                                indent,
+                                &format!("scratch_dirty_{} = true;", variable.slot),
+                            );
+                        }
+                        if deferred_change && textual.contains(&variable.slot) {
+                            line(
+                                output,
+                                indent,
+                                &format!("scratch_text_{} = false;", variable.slot),
+                            );
+                        }
+                    }
+                    if let Some(variable) = variable_field(block, "VARIABLE", variables) {
+                        cached_indexes.remove(&variable.slot);
+                        cached_items.retain(|_, item| !item.index_slots.contains(&variable.slot));
+                    }
                 }
                 if block.opcode == "data_replaceitemoflist" {
-                    if let Some(list) = list_field(block, "LIST", lists) { cached_items.retain(|_, item| item.list_slot != list.slot); } else { cached_items.clear(); }
+                    if let Some(list) = list_field(block, "LIST", lists) {
+                        cached_items.retain(|_, item| item.list_slot != list.slot);
+                    } else {
+                        cached_items.clear();
+                    }
                 }
-            },
+            }
         }
         current = block.next.as_deref();
     }
 }
 
 fn emit_shared_list_copy(
-    target: &ScratchTarget, block: &ScratchBlock, variables: &HashMap<String, VariableInfo>,
-    lists: &HashMap<String, ListInfo>, arguments: &HashMap<String, String>, output: &mut String, indent: usize,
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    output: &mut String,
+    indent: usize,
 ) -> Option<usize> {
-    let Some(variable) = variable_field(block, "VARIABLE", variables) else { return None };
-    if variable.is_stage || variable.target != target.name || variable.slot < lists.values().map(|list| list.slot + 1).max().unwrap_or(0) { return None; }
-    let Some(InputValue::BlockReference(id)) = block.inputs.get("VALUE").and_then(parse_input) else { return None };
-    let Some(reporter) = target.blocks.get(id) else { return None };
-    if reporter.opcode != "data_itemoflist" { return None; }
-    let Some(list) = list_field(reporter, "LIST", lists) else { return None };
-    if !list.is_stage { return None; }
-    let index = expression(target, reporter.inputs.get("INDEX"), variables, lists, arguments, &mut HashSet::new());
-    line(output, indent, &format!("let scratch_list_index: ScratchValue = ({index}).to_owned().into();"));
-    line(output, indent, &format!("let cached_index_{} = state.set_local_from_shared_list::<{}>({}, {}, scratch_list_index);", variable.slot, list.cache_numeric_reads, variable.slot, list.slot));
+    let Some(variable) = variable_field(block, "VARIABLE", variables) else {
+        return None;
+    };
+    if variable.is_stage
+        || variable.target != target.name
+        || variable.slot < lists.values().map(|list| list.slot + 1).max().unwrap_or(0)
+    {
+        return None;
+    }
+    let Some(InputValue::BlockReference(id)) = block.inputs.get("VALUE").and_then(parse_input)
+    else {
+        return None;
+    };
+    let Some(reporter) = target.blocks.get(id) else {
+        return None;
+    };
+    if reporter.opcode != "data_itemoflist" {
+        return None;
+    }
+    let Some(list) = list_field(reporter, "LIST", lists) else {
+        return None;
+    };
+    if !list.is_stage {
+        return None;
+    }
+    let index = expression(
+        target,
+        reporter.inputs.get("INDEX"),
+        variables,
+        lists,
+        arguments,
+        &mut HashSet::new(),
+    );
+    line(
+        output,
+        indent,
+        &format!("let scratch_list_index: ScratchValue = ({index}).to_owned().into();"),
+    );
+    line(
+        output,
+        indent,
+        &format!(
+            "let cached_index_{} = state.set_local_from_shared_list::<{}>({}, {}, scratch_list_index);",
+            variable.slot, list.cache_numeric_reads, variable.slot, list.slot
+        ),
+    );
     Some(variable.slot)
 }
 
@@ -1180,6 +3112,7 @@ fn generate_resumable_block_chain(
     procedure_entries: &HashMap<String, ProcedureEntry>,
     emitted_blocks: &mut HashSet<String>,
     fast_math: bool,
+    no_warp_timer: bool,
     output: &mut String,
 ) {
     if emitted_blocks.contains(id) {
@@ -1195,6 +3128,7 @@ fn generate_resumable_block_chain(
             arguments,
             procedures,
             procedure_entries,
+            no_warp_timer,
             output,
         );
         return;
@@ -1207,26 +3141,471 @@ fn generate_resumable_block_chain(
         }),
         ScriptNode::LoopBoundary(_) => None,
     });
-    if let Some((loop_id, enclosing)) = enclosing_loop.filter(|_| structured_loop_body(target, id, procedures, procedure_entries)) {
+    if let Some((loop_id, enclosing)) =
+        enclosing_loop.filter(|_| structured_loop_body(target, id, procedures, procedure_entries))
+    {
         emitted_blocks.insert(id.to_owned());
         line(output, 4, &format!("{} => {{", graph.block_pcs[id]));
         let repeat = enclosing.opcode == "control_repeat";
-        if repeat { line(output, 5, "loop {"); }
-        let body_indent = if repeat { 6 } else { 5 };
-        emit_structured_loop_chain(target, Some(id), graph, variables, lists, arguments, procedures, procedure_entries, output, body_indent, &mut HashSet::new(), &mut HashMap::new());
-        let mut last = id;
-        while let Some(next) = target.blocks[last].next.as_deref() { last = next; }
-        if repeat {
-            let repeat_slot = graph.repeat_slots[loop_id];
-            let next_pc = enclosing.next.as_ref().and_then(|next| graph.block_pcs.get(next).copied()).unwrap_or(graph.fallthrough_pcs[loop_id]);
-            line(output, 6, &format!("let repeat_remaining = script.frames.last().unwrap().repeat_counts[{repeat_slot}].saturating_sub(1);"));
-            line(output, 6, &format!("script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_remaining;"));
-            line(output, 6, &format!("script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 {{ {} }} else {{ {} }};", graph.block_pcs[id], pc_literal(next_pc)));
-            line(output, 6, "if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }");
-            line(output, 6, "if repeat_remaining == 0 { break; }");
-            line(output, 5, "}");
+        let (numeric, deferred, textual) = if repeat {
+            structured_numeric_locals(target, id, variables, true, false)
         } else {
-            line(output, 5, &format!("script.frames.last_mut().unwrap().pc = {};", pc_literal(graph.fallthrough_pcs[last])));
+            (Vec::new(), HashSet::new(), HashSet::new())
+        };
+        let mut needed = HashSet::new();
+        collect_region_entry_reads(
+            target,
+            Some(id),
+            variables,
+            &mut HashSet::new(),
+            &mut needed,
+            false,
+        );
+        let numeric_slots = numeric.iter().map(|v| v.slot).collect::<HashSet<_>>();
+        let dynamic = if repeat {
+            structured_dynamic_locals(target, id, variables, &numeric_slots)
+        } else {
+            Vec::new()
+        };
+        let has_locals = !numeric.is_empty() || !dynamic.is_empty();
+        let mut typed_variables = variables.clone();
+        for variable in typed_variables.values_mut() {
+            if numeric_slots.contains(&variable.slot) {
+                variable.index_read_override = Some(format!("scratch_typed_{}", variable.slot));
+            } else if dynamic.iter().any(|v| v.slot == variable.slot) {
+                variable.index_read_override = Some(format!("&scratch_dynamic_{}", variable.slot));
+            }
+        }
+        if has_locals {
+            let pattern = numeric
+                .iter()
+                .filter(|v| needed.contains(&v.slot))
+                .map(|v| format!("Some(mut scratch_typed_{})", v.slot))
+                .collect::<Vec<_>>();
+            let values = numeric
+                .iter()
+                .filter(|v| needed.contains(&v.slot))
+                .map(|v| format!("{}.canonical_number()", v.read_expression()))
+                .collect::<Vec<_>>();
+            let slots = numeric
+                .iter()
+                .filter(|v| deferred.contains(&v.slot))
+                .chain(dynamic.iter())
+                .map(|v| v.slot.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let pattern = std::iter::once("true".to_owned())
+                .chain(pattern)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let values = std::iter::once(format!("state.can_defer_variable_writes(&[{slots}])"))
+                .chain(values)
+                .collect::<Vec<_>>()
+                .join(", ");
+            line(output, 5, &format!("if let ({pattern},) = ({values},) {{"));
+            for variable in numeric.iter().filter(|v| !needed.contains(&v.slot)) {
+                line(
+                    output,
+                    6,
+                    &format!("let mut scratch_typed_{} = 0.0_f64;", variable.slot),
+                );
+            }
+            for variable in numeric.iter().filter(|v| deferred.contains(&v.slot)) {
+                line(
+                    output,
+                    6,
+                    &format!("let mut scratch_dirty_{} = false;", variable.slot),
+                );
+                if textual.contains(&variable.slot) {
+                    line(
+                        output,
+                        6,
+                        &format!("let mut scratch_text_{} = false;", variable.slot),
+                    );
+                }
+            }
+            for variable in &dynamic {
+                let initial = if needed.contains(&variable.slot) {
+                    format!("{}.clone()", variable.read_expression())
+                } else {
+                    "ScratchValue::Undefined".to_owned()
+                };
+                line(
+                    output,
+                    6,
+                    &format!("let mut scratch_dynamic_{} = {initial};", variable.slot),
+                );
+                line(
+                    output,
+                    6,
+                    &format!("let mut scratch_dynamic_dirty_{} = false;", variable.slot),
+                );
+            }
+        }
+        let mut last = id;
+        while let Some(next) = target.blocks[last].next.as_deref() {
+            last = next;
+        }
+        let no_numeric_slots = HashSet::new();
+        for optimized in 0..if has_locals { 2 } else { 1 } {
+            let typed = has_locals && optimized == 0;
+            let block_indent = if has_locals { 6 } else { 5 };
+            if repeat && has_locals {
+                let slot = graph.repeat_slots[loop_id];
+                line(
+                    output,
+                    block_indent,
+                    &format!(
+                        "let mut repeat_remaining = script.frames.last().unwrap().repeat_counts[{slot}];"
+                    ),
+                );
+                line(
+                    output,
+                    block_indent,
+                    "let scratch_warp_mode = script.frames.last().unwrap().warp_mode;",
+                );
+            }
+            if repeat {
+                line(output, block_indent, "loop {");
+            }
+            let body_indent = block_indent + usize::from(repeat);
+            emit_structured_loop_chain(
+                target,
+                Some(id),
+                graph,
+                if typed { &typed_variables } else { variables },
+                variables,
+                lists,
+                arguments,
+                procedures,
+                procedure_entries,
+                no_warp_timer,
+                output,
+                body_indent,
+                &mut HashSet::new(),
+                &mut HashMap::new(),
+                if typed {
+                    &numeric_slots
+                } else {
+                    &no_numeric_slots
+                },
+                if typed { &deferred } else { &no_numeric_slots },
+                if typed { &textual } else { &no_numeric_slots },
+                if typed { &dynamic } else { &[] },
+            );
+            if repeat {
+                let repeat_slot = graph.repeat_slots[loop_id];
+                let next_pc = enclosing
+                    .next
+                    .as_ref()
+                    .and_then(|next| graph.block_pcs.get(next).copied())
+                    .unwrap_or(graph.fallthrough_pcs[loop_id]);
+                if !has_locals {
+                    line(
+                        output,
+                        body_indent,
+                        &format!(
+                            "let repeat_remaining = script.frames.last().unwrap().repeat_counts[{repeat_slot}].saturating_sub(1);"
+                        ),
+                    );
+                    line(
+                        output,
+                        body_indent,
+                        &format!(
+                            "script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_remaining;"
+                        ),
+                    );
+                    line(
+                        output,
+                        body_indent,
+                        &format!(
+                            "script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 {{ {} }} else {{ {} }};",
+                            graph.block_pcs[id],
+                            pc_literal(next_pc)
+                        ),
+                    );
+                } else {
+                    line(
+                        output,
+                        body_indent,
+                        "repeat_remaining = repeat_remaining.saturating_sub(1);",
+                    );
+                }
+                let yield_condition = if !has_locals {
+                    if no_warp_timer {
+                        "!script.frames.last().unwrap().warp_mode"
+                    } else {
+                        "script.yield_at_safe_point(clock)"
+                    }
+                } else if no_warp_timer {
+                    "!scratch_warp_mode"
+                } else {
+                    "!scratch_warp_mode || script.warp_budget.expired(clock)"
+                };
+                line(output, body_indent, &format!("if {yield_condition} {{"));
+                if has_locals {
+                    if !no_warp_timer {
+                        line(
+                            output,
+                            body_indent + 1,
+                            "if !scratch_warp_mode { script.warp_budget.reset(); }",
+                        );
+                    }
+                    line(
+                        output,
+                        body_indent + 1,
+                        &format!(
+                            "script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_remaining;"
+                        ),
+                    );
+                    line(
+                        output,
+                        body_indent + 1,
+                        &format!(
+                            "script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 {{ {} }} else {{ {} }};",
+                            graph.block_pcs[id],
+                            pc_literal(next_pc)
+                        ),
+                    );
+                }
+                if typed {
+                    emit_deferred_numeric_commits(
+                        output,
+                        body_indent + 1,
+                        &numeric,
+                        &deferred,
+                        &textual,
+                    );
+                    emit_deferred_dynamic_commits(output, body_indent + 1, &dynamic, false);
+                }
+                line(output, body_indent + 1, "return ScriptStatus::Yield;");
+                line(output, body_indent, "}");
+                line(output, body_indent, "if repeat_remaining == 0 { break; }");
+                line(output, block_indent, "}");
+                if has_locals {
+                    line(
+                        output,
+                        block_indent,
+                        &format!(
+                            "script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = 0;"
+                        ),
+                    );
+                    line(
+                        output,
+                        block_indent,
+                        &format!(
+                            "script.frames.last_mut().unwrap().pc = {};",
+                            pc_literal(next_pc)
+                        ),
+                    );
+                }
+                if typed {
+                    emit_deferred_numeric_commits(
+                        output,
+                        block_indent,
+                        &numeric,
+                        &deferred,
+                        &textual,
+                    );
+                    emit_deferred_dynamic_commits(output, block_indent, &dynamic, false);
+                }
+            } else {
+                line(
+                    output,
+                    block_indent,
+                    &format!(
+                        "script.frames.last_mut().unwrap().pc = {};",
+                        pc_literal(graph.fallthrough_pcs[last])
+                    ),
+                );
+            }
+            if typed {
+                line(output, 5, "} else {");
+            }
+        }
+        if has_locals {
+            line(output, 5, "}");
+        }
+        line(output, 5, "continue;");
+        line(output, 4, "},");
+        return;
+    }
+    if let Some((loop_id, enclosing)) = enclosing_loop.filter(|(_, block)| {
+        block.opcode == "control_repeat" && partial_structured_body(target, id)
+    }) {
+        emitted_blocks.insert(id.to_owned());
+        let (numeric, deferred, textual) =
+            structured_numeric_locals(target, id, variables, true, true);
+        let mut needed = HashSet::new();
+        collect_region_entry_reads(
+            target,
+            Some(id),
+            variables,
+            &mut HashSet::new(),
+            &mut needed,
+            true,
+        );
+        let numeric_slots = numeric.iter().map(|v| v.slot).collect::<HashSet<_>>();
+        let mut typed_variables = variables.clone();
+        for variable in typed_variables.values_mut() {
+            if numeric_slots.contains(&variable.slot) {
+                variable.index_read_override = Some(format!("scratch_typed_{}", variable.slot));
+            }
+        }
+        line(output, 4, &format!("{} => {{", graph.block_pcs[id]));
+        if !numeric.is_empty() {
+            let pattern = numeric
+                .iter()
+                .filter(|v| needed.contains(&v.slot))
+                .map(|v| format!("Some(mut scratch_typed_{})", v.slot))
+                .collect::<Vec<_>>();
+            let values = numeric
+                .iter()
+                .filter(|v| needed.contains(&v.slot))
+                .map(|v| format!("{}.canonical_number()", v.read_expression()))
+                .collect::<Vec<_>>();
+            let slots = numeric
+                .iter()
+                .filter(|v| deferred.contains(&v.slot))
+                .map(|v| v.slot.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let pattern = std::iter::once("true".to_owned())
+                .chain(pattern)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let values = std::iter::once(format!("state.can_defer_variable_writes(&[{slots}])"))
+                .chain(values)
+                .collect::<Vec<_>>()
+                .join(", ");
+            line(output, 5, &format!("if let ({pattern},) = ({values},) {{"));
+            for variable in numeric.iter().filter(|v| !needed.contains(&v.slot)) {
+                line(
+                    output,
+                    6,
+                    &format!("let mut scratch_typed_{} = 0.0_f64;", variable.slot),
+                );
+            }
+            for variable in numeric.iter().filter(|v| deferred.contains(&v.slot)) {
+                line(
+                    output,
+                    6,
+                    &format!("let mut scratch_dirty_{} = false;", variable.slot),
+                );
+                if textual.contains(&variable.slot) {
+                    line(
+                        output,
+                        6,
+                        &format!("let mut scratch_text_{} = false;", variable.slot),
+                    );
+                }
+            }
+        }
+        let empty = HashSet::new();
+        for version in 0..if numeric.is_empty() { 1 } else { 2 } {
+            let typed = !numeric.is_empty() && version == 0;
+            let level = if numeric.is_empty() { 5 } else { 6 };
+            let repeat_slot = graph.repeat_slots[loop_id];
+            let next_pc = enclosing
+                .next
+                .as_ref()
+                .and_then(|next| graph.block_pcs.get(next).copied())
+                .unwrap_or(graph.fallthrough_pcs[loop_id]);
+            line(
+                output,
+                level,
+                &format!(
+                    "let mut repeat_remaining = script.frames.last().unwrap().repeat_counts[{repeat_slot}];"
+                ),
+            );
+            line(
+                output,
+                level,
+                "let scratch_warp_mode = script.frames.last().unwrap().warp_mode;",
+            );
+            line(output, level, "let mut scratch_region_escaped = false;");
+            line(output, level, "'scratch_compiled_loop: loop {");
+            emit_partial_structured_chain(
+                target,
+                Some(id),
+                graph,
+                if typed { &typed_variables } else { variables },
+                variables,
+                lists,
+                arguments,
+                if typed { &numeric_slots } else { &empty },
+                if typed { &deferred } else { &empty },
+                if typed { &textual } else { &empty },
+                procedures,
+                procedure_entries,
+                no_warp_timer,
+                Some(repeat_slot),
+                output,
+                level + 1,
+            );
+            line(
+                output,
+                level + 1,
+                "repeat_remaining = repeat_remaining.saturating_sub(1);",
+            );
+            let yield_condition = if no_warp_timer {
+                "!scratch_warp_mode"
+            } else {
+                "!scratch_warp_mode || script.warp_budget.expired(clock)"
+            };
+            line(output, level + 1, &format!("if {yield_condition} {{"));
+            if !no_warp_timer {
+                line(
+                    output,
+                    level + 2,
+                    "if !scratch_warp_mode { script.warp_budget.reset(); }",
+                );
+            }
+            line(
+                output,
+                level + 2,
+                &format!(
+                    "script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_remaining;"
+                ),
+            );
+            line(
+                output,
+                level + 2,
+                &format!(
+                    "script.frames.last_mut().unwrap().pc = if repeat_remaining > 0 {{ {} }} else {{ {} }};",
+                    graph.block_pcs[id],
+                    pc_literal(next_pc)
+                ),
+            );
+            if typed {
+                emit_deferred_numeric_commits(output, level + 2, &numeric, &deferred, &textual);
+            }
+            line(output, level + 2, "return ScriptStatus::Yield;");
+            line(output, level + 1, "}");
+            line(output, level + 1, "if repeat_remaining == 0 { break; }");
+            line(output, level, "}");
+            line(
+                output,
+                level,
+                &format!(
+                    "script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_remaining;"
+                ),
+            );
+            line(
+                output,
+                level,
+                &format!(
+                    "if !scratch_region_escaped {{ script.frames.last_mut().unwrap().pc = {}; }}",
+                    pc_literal(next_pc)
+                ),
+            );
+            if typed {
+                emit_deferred_numeric_commits(output, level, &numeric, &deferred, &textual);
+                line(output, 5, "} else {");
+            }
+        }
+        if !numeric.is_empty() {
+            line(output, 5, "}");
         }
         line(output, 5, "continue;");
         line(output, 4, "},");
@@ -1244,6 +3623,7 @@ fn generate_resumable_block_chain(
             lists,
             arguments,
             &plan,
+            no_warp_timer,
             output,
         );
         return;
@@ -1252,8 +3632,276 @@ fn generate_resumable_block_chain(
         emitted_blocks.insert(id.to_owned());
         emitted_blocks.extend(plan.body.iter().cloned());
         generate_native_numeric_loop(
-            target, id, block, graph, variables, &plan, fast_math, output,
+            target,
+            id,
+            block,
+            graph,
+            variables,
+            &plan,
+            fast_math,
+            no_warp_timer,
+            output,
         );
+        return;
+    }
+    if matches!(block.opcode.as_str(), "control_if" | "control_if_else")
+        && partial_structured_body(target, id)
+    {
+        emitted_blocks.insert(id.to_owned());
+        let (numeric, deferred, textual) =
+            structured_numeric_locals(target, id, variables, true, true);
+        let mut needed = HashSet::new();
+        collect_region_entry_reads(
+            target,
+            Some(id),
+            variables,
+            &mut HashSet::new(),
+            &mut needed,
+            true,
+        );
+        let numeric_slots = numeric.iter().map(|v| v.slot).collect::<HashSet<_>>();
+        let mut typed_variables = variables.clone();
+        for variable in typed_variables.values_mut() {
+            if numeric_slots.contains(&variable.slot) {
+                variable.index_read_override = Some(format!("scratch_typed_{}", variable.slot));
+            }
+        }
+        let mut last = id;
+        while let Some(next) = target.blocks[last].next.as_deref() {
+            last = next;
+        }
+        let continuation = graph.fallthrough_pcs[last];
+        line(output, 4, &format!("{} => {{", graph.block_pcs[id]));
+        if !numeric.is_empty() {
+            let pattern = std::iter::once("true".to_owned())
+                .chain(
+                    numeric
+                        .iter()
+                        .filter(|v| needed.contains(&v.slot))
+                        .map(|v| format!("Some(mut scratch_typed_{})", v.slot)),
+                )
+                .collect::<Vec<_>>()
+                .join(", ");
+            let slots = numeric
+                .iter()
+                .filter(|v| deferred.contains(&v.slot))
+                .map(|v| v.slot.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let values = std::iter::once(format!("state.can_defer_variable_writes(&[{slots}])"))
+                .chain(
+                    numeric
+                        .iter()
+                        .filter(|v| needed.contains(&v.slot))
+                        .map(|v| format!("{}.canonical_number()", v.read_expression())),
+                )
+                .collect::<Vec<_>>()
+                .join(", ");
+            line(output, 5, &format!("if let ({pattern},) = ({values},) {{"));
+            for variable in numeric.iter().filter(|v| !needed.contains(&v.slot)) {
+                line(
+                    output,
+                    6,
+                    &format!("let mut scratch_typed_{} = 0.0_f64;", variable.slot),
+                );
+            }
+            for variable in numeric.iter().filter(|v| deferred.contains(&v.slot)) {
+                line(
+                    output,
+                    6,
+                    &format!("let mut scratch_dirty_{} = false;", variable.slot),
+                );
+                if textual.contains(&variable.slot) {
+                    line(
+                        output,
+                        6,
+                        &format!("let mut scratch_text_{} = false;", variable.slot),
+                    );
+                }
+            }
+        }
+        let empty = HashSet::new();
+        for version in 0..if numeric.is_empty() { 1 } else { 2 } {
+            let typed = !numeric.is_empty() && version == 0;
+            let level = if numeric.is_empty() { 5 } else { 6 };
+            line(output, level, "let mut scratch_region_escaped = false;");
+            line(output, level, "'scratch_compiled_loop: {");
+            emit_partial_structured_chain(
+                target,
+                Some(id),
+                graph,
+                if typed { &typed_variables } else { variables },
+                variables,
+                lists,
+                arguments,
+                if typed { &numeric_slots } else { &empty },
+                if typed { &deferred } else { &empty },
+                if typed { &textual } else { &empty },
+                procedures,
+                procedure_entries,
+                no_warp_timer,
+                None,
+                output,
+                level + 1,
+            );
+            line(output, level, "}");
+            if typed {
+                emit_deferred_numeric_commits(output, level, &numeric, &deferred, &textual);
+            }
+            line(
+                output,
+                level,
+                &format!(
+                    "if !scratch_region_escaped {{ script.frames.last_mut().unwrap().pc = {}; }}",
+                    pc_literal(continuation)
+                ),
+            );
+            if typed {
+                line(output, 5, "} else {");
+            }
+        }
+        if !numeric.is_empty() {
+            line(output, 5, "}");
+        }
+        line(output, 5, "continue;");
+        line(output, 4, "},");
+        return;
+    }
+    if let Some((ids, numeric, deferred, needed)) = straight_numeric_region(target, id, variables)
+        .filter(|(ids, _, _, _)| {
+            ids.iter()
+                .all(|id| graph.block_pcs.contains_key(*id) && !emitted_blocks.contains(*id))
+        })
+    {
+        for id in &ids {
+            emitted_blocks.insert((*id).to_owned());
+        }
+        let slots = numeric.iter().map(|v| v.slot).collect::<HashSet<_>>();
+        let mut typed_variables = variables.clone();
+        for variable in typed_variables.values_mut() {
+            if slots.contains(&variable.slot) {
+                variable.index_read_override = Some(format!("scratch_typed_{}", variable.slot));
+            }
+        }
+        let pattern = std::iter::once("true".to_owned())
+            .chain(
+                numeric
+                    .iter()
+                    .filter(|v| needed.contains(&v.slot))
+                    .map(|v| format!("Some(mut scratch_typed_{})", v.slot)),
+            )
+            .collect::<Vec<_>>()
+            .join(", ");
+        let guarded = numeric
+            .iter()
+            .filter(|v| needed.contains(&v.slot))
+            .map(|v| format!("{}.canonical_number()", v.read_expression()));
+        let deferred_slots = numeric
+            .iter()
+            .filter(|v| deferred.contains(&v.slot))
+            .map(|v| v.slot.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let values = std::iter::once(format!(
+            "state.can_defer_variable_writes(&[{deferred_slots}])"
+        ))
+        .chain(guarded)
+        .collect::<Vec<_>>()
+        .join(", ");
+        line(output, 4, &format!("{} => {{", graph.block_pcs[id]));
+        line(output, 5, &format!("if let ({pattern},) = ({values},) {{"));
+        for variable in numeric.iter().filter(|v| !needed.contains(&v.slot)) {
+            line(
+                output,
+                6,
+                &format!("let mut scratch_typed_{} = 0.0_f64;", variable.slot),
+            );
+        }
+        for variable in numeric.iter().filter(|v| deferred.contains(&v.slot)) {
+            line(
+                output,
+                6,
+                &format!("let mut scratch_dirty_{} = false;", variable.slot),
+            );
+        }
+        for typed in [true, false] {
+            let active = if typed { &typed_variables } else { variables };
+            for current in &ids {
+                let statement = &target.blocks[*current];
+                let variable = variable_field(statement, "VARIABLE", active)
+                    .expect("region target was analyzed");
+                if typed && slots.contains(&variable.slot) {
+                    if statement.opcode == "data_setvariableto" {
+                        emit_typed_numeric_set(
+                            target,
+                            statement,
+                            &variable,
+                            active,
+                            lists,
+                            arguments,
+                            &deferred,
+                            &HashSet::new(),
+                            output,
+                            6,
+                        );
+                    } else {
+                        let value = expression(
+                            target,
+                            statement.inputs.get("VALUE"),
+                            active,
+                            lists,
+                            arguments,
+                            &mut HashSet::new(),
+                        );
+                        line(
+                            output,
+                            6,
+                            &format!("let scratch_change = scratch_to_number({value});"),
+                        );
+                        line(
+                            output,
+                            6,
+                            &format!(
+                                "scratch_typed_{0} = scratch_number_operand(scratch_typed_{0}) + scratch_change; scratch_dirty_{0} = true;",
+                                variable.slot
+                            ),
+                        );
+                    }
+                } else {
+                    generate_resumable_statement(
+                        target,
+                        statement,
+                        usize::MAX,
+                        active,
+                        lists,
+                        arguments,
+                        output,
+                        6,
+                    );
+                }
+            }
+            if typed {
+                emit_deferred_numeric_commits(output, 6, &numeric, &deferred, &HashSet::new());
+                line(output, 5, "} else {");
+            }
+        }
+        line(output, 5, "}");
+        let last = ids.last().unwrap();
+        let next = target.blocks[*last]
+            .next
+            .as_ref()
+            .and_then(|id| graph.block_pcs.get(id).copied())
+            .unwrap_or(graph.fallthrough_pcs[*last]);
+        line(
+            output,
+            5,
+            &format!(
+                "script.frames.last_mut().unwrap().pc = {};",
+                pc_literal(next)
+            ),
+        );
+        line(output, 5, "continue;");
+        line(output, 4, "},");
         return;
     }
     if !is_straight_line_block(block) {
@@ -1267,6 +3915,7 @@ fn generate_resumable_block_chain(
             arguments,
             procedures,
             procedure_entries,
+            no_warp_timer,
             output,
         );
         return;
@@ -1396,9 +4045,10 @@ fn fused_repeat_plan(
     });
     if local_random
         && blocks.iter().any(|id| {
-            target.blocks.get(id).is_some_and(|statement| {
-                !fused_random_inputs_safe(target, statement, variables)
-            })
+            target
+                .blocks
+                .get(id)
+                .is_some_and(|statement| !fused_random_inputs_safe(target, statement, variables))
         })
     {
         return None;
@@ -1500,7 +4150,11 @@ fn fused_random_inputs_safe(
 ) -> bool {
     if statement.opcode == "data_replaceitemoflist"
         && !variable_input_info(target, statement.inputs.get("INDEX"), variables)
-            .zip(variable_input_info(target, statement.inputs.get("ITEM"), variables))
+            .zip(variable_input_info(
+                target,
+                statement.inputs.get("ITEM"),
+                variables,
+            ))
             .is_some_and(|(index, item)| index.numeric && item.numeric)
     {
         return false;
@@ -1604,11 +4258,9 @@ fn fused_replacement_compare(
     }
     let replaced_list = list_field(replacement, "LIST", lists)?;
     let replaced_index = variable_input_info(target, replacement.inputs.get("INDEX"), variables)?;
-    for (item_input, expected_input) in [
-        ("OPERAND1", "OPERAND2"),
-        ("OPERAND2", "OPERAND1"),
-    ] {
-        let InputValue::BlockReference(id) = parse_input(comparison.inputs.get(item_input)?)? else {
+    for (item_input, expected_input) in [("OPERAND1", "OPERAND2"), ("OPERAND2", "OPERAND1")] {
+        let InputValue::BlockReference(id) = parse_input(comparison.inputs.get(item_input)?)?
+        else {
             continue;
         };
         let item_reporter = target.blocks.get(id)?;
@@ -1618,7 +4270,8 @@ fn fused_replacement_compare(
             continue;
         }
         let item_index = variable_input_info(target, item_reporter.inputs.get("INDEX"), variables)?;
-        let expected = variable_input_info(target, comparison.inputs.get(expected_input), variables)?;
+        let expected =
+            variable_input_info(target, comparison.inputs.get(expected_input), variables)?;
         if replaced_index.slot == item_index.slot
             && replaced_index.numeric
             && item_index.numeric
@@ -1723,6 +4376,7 @@ fn generate_fused_repeat_loop(
     lists: &HashMap<String, ListInfo>,
     arguments: &HashMap<String, String>,
     plan: &FusedRepeatPlan,
+    no_warp_timer: bool,
     output: &mut String,
 ) {
     let pc = graph.block_pcs[id];
@@ -1747,11 +4401,13 @@ fn generate_fused_repeat_loop(
         5,
         "let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);",
     );
-    line(
-        output,
-        5,
-        "if !scratch_warp_mode { script.warp_budget.reset(); }",
-    );
+    if !no_warp_timer {
+        line(
+            output,
+            5,
+            "if !scratch_warp_mode { script.warp_budget.reset(); }",
+        );
+    }
     line(
         output,
         5,
@@ -1925,21 +4581,37 @@ fn generate_fused_repeat_loop(
             pc_literal(next_pc)
         ),
     );
-    line(
-        output,
-        body_indent + 1,
-        if plan.local_random {
-            "if script.yield_at_safe_point(clock) { return Some(ScriptStatus::Yield); }"
-        } else {
-            "if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }"
-        },
-    );
+    if no_warp_timer {
+        line(
+            output,
+            body_indent + 1,
+            if plan.local_random {
+                "if !scratch_warp_mode { return Some(ScriptStatus::Yield); }"
+            } else {
+                "if !scratch_warp_mode { return ScriptStatus::Yield; }"
+            },
+        );
+    } else {
+        line(
+            output,
+            body_indent + 1,
+            if plan.local_random {
+                "if script.yield_at_safe_point(clock) { return Some(ScriptStatus::Yield); }"
+            } else {
+                "if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }"
+            },
+        );
+    }
     line(output, body_indent + 1, "break;");
     line(output, body_indent, "}");
     line(
         output,
         body_indent,
-        "if script.yield_at_safe_point(clock) {",
+        if no_warp_timer {
+            "if !scratch_warp_mode {"
+        } else {
+            "if script.yield_at_safe_point(clock) {"
+        },
     );
     line(
         output,
@@ -1991,7 +4663,14 @@ fn generate_fused_set_variable(
     if let Some(variable) = variable_field(block, "VARIABLE", variables) {
         let input = block.inputs.get("VALUE");
         let value = fused_random_expression(
-            expression(target, input, variables, lists, arguments, &mut HashSet::new()),
+            expression(
+                target,
+                input,
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            ),
             local_random,
         );
         if variable.numeric {
@@ -2000,8 +4679,8 @@ fn generate_fused_set_variable(
             } else {
                 "set_local_number"
             };
-            if let Some(source) = variable_input_info(target, input, variables)
-                .filter(|source| source.numeric)
+            if let Some(source) =
+                variable_input_info(target, input, variables).filter(|source| source.numeric)
             {
                 let source = source.read_expression();
                 line(
@@ -2026,14 +4705,22 @@ fn generate_fused_set_variable(
                 indent,
                 &format!("let scratch_new_value: ScratchValue = ({source}).clone();"),
             );
-            line(output, indent, &variable.write_statement("scratch_new_value"));
+            line(
+                output,
+                indent,
+                &variable.write_statement("scratch_new_value"),
+            );
         } else {
             line(
                 output,
                 indent,
                 &format!("let scratch_new_value: ScratchValue = ({value}).into();"),
             );
-            line(output, indent, &variable.write_statement("scratch_new_value"));
+            line(
+                output,
+                indent,
+                &variable.write_statement("scratch_new_value"),
+            );
         }
     }
 }
@@ -2069,7 +4756,10 @@ fn generate_fused_change_variable(
         line(
             output,
             indent,
-            &format!("state.{method}({}, scratch_to_number({value}));", variable.slot),
+            &format!(
+                "state.{method}({}, scratch_to_number({value}));",
+                variable.slot
+            ),
         );
     }
 }
@@ -2099,10 +4789,7 @@ fn generate_fused_replace_item(
                 indent,
                 &format!(
                     "let scratch_list_replace_inputs = match (state.get({}), state.get({}), state.get({})) {{ (ScratchValue::Number(scratch_index), ScratchValue::Number(scratch_item), ScratchValue::Number(scratch_expected)) => Some((*scratch_index, *scratch_item, *scratch_expected)), _ => None }}; let scratch_list_replace_result = scratch_list_replace_inputs.map(|(scratch_index, scratch_item, scratch_expected)| state.list_mut({}).replace_number_and_equals(scratch_index, scratch_item, scratch_expected));",
-                    index.slot,
-                    item.slot,
-                    compare.expected.slot,
-                    list.slot
+                    index.slot, item.slot, compare.expected.slot, list.slot
                 ),
             );
             line(
@@ -2182,7 +4869,10 @@ fn generate_fused_replace_item(
         line(
             output,
             indent,
-            &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
+            &format!(
+                "state.list_changed_result({}, scratch_list_changed);",
+                list.slot
+            ),
         );
     }
 }
@@ -2403,6 +5093,7 @@ fn generate_native_numeric_loop(
     variables: &HashMap<String, VariableInfo>,
     plan: &NumericLoopPlan,
     fast_math: bool,
+    no_warp_timer: bool,
     output: &mut String,
 ) {
     let pc = graph.block_pcs[id];
@@ -2433,15 +5124,27 @@ fn generate_native_numeric_loop(
         5,
         "let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);",
     );
-    line(
-        output,
-        5,
-        "if !scratch_warp_mode { script.warp_budget.reset(); }",
-    );
+    if !no_warp_timer {
+        line(
+            output,
+            5,
+            "if !scratch_warp_mode { script.warp_budget.reset(); }",
+        );
+    }
 
     if block.opcode == "control_repeat" {
         generate_native_repeat_loop(
-            target, id, block, graph, variables, plan, &locals, next_pc, output, fast_math,
+            target,
+            id,
+            block,
+            graph,
+            variables,
+            plan,
+            &locals,
+            next_pc,
+            output,
+            fast_math,
+            no_warp_timer,
         );
     } else {
         line(output, 5, "loop {");
@@ -2467,7 +5170,11 @@ fn generate_native_numeric_loop(
         line(
             output,
             6,
-            "if !scratch_warp_mode || script.warp_budget.expired(clock) {",
+            if no_warp_timer {
+                "if !scratch_warp_mode {"
+            } else {
+                "if !scratch_warp_mode || script.warp_budget.expired(clock) {"
+            },
         );
         line(
             output,
@@ -2504,6 +5211,7 @@ fn generate_native_repeat_loop(
     next_pc: usize,
     output: &mut String,
     fast_math: bool,
+    no_warp_timer: bool,
 ) {
     let pc = graph.block_pcs[id];
     let slot = graph.repeat_slots[id];
@@ -2556,7 +5264,11 @@ fn generate_native_repeat_loop(
     line(
         output,
         6,
-        "if !scratch_warp_mode || script.warp_budget.expired(clock) {",
+        if no_warp_timer {
+            "if !scratch_warp_mode {"
+        } else {
+            "if !scratch_warp_mode || script.warp_budget.expired(clock) {"
+        },
     );
     line(
         output,
@@ -2701,6 +5413,7 @@ fn generate_loop_boundary(
     target: &ScratchTarget,
     id: &str,
     graph: &ScriptGraph,
+    no_warp_timer: bool,
     output: &mut String,
 ) {
     let pc = graph.boundary_pcs[id];
@@ -2751,11 +5464,19 @@ fn generate_loop_boundary(
             &format!("script.frames.last_mut().unwrap().pc = {loop_pc};"),
         );
     }
-    line(
-        output,
-        5,
-        "if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }",
-    );
+    if no_warp_timer {
+        line(
+            output,
+            5,
+            "if !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }",
+        );
+    } else {
+        line(
+            output,
+            5,
+            "if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }",
+        );
+    }
     line(output, 5, "continue;");
     line(output, 4, "},");
 }
@@ -2763,23 +5484,58 @@ fn generate_loop_boundary(
 // Only cache indexes whose expression is composed of pure arithmetic,
 // literals and variable reads. Preserve dynamic selector values in the cache.
 fn collect_list_index_variables(
-    target: &ScratchTarget, input: Option<&Value>, variables: &HashMap<String, VariableInfo>,
-    active: &mut HashSet<String>, found: &mut HashSet<usize>,
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, VariableInfo>,
+    active: &mut HashSet<String>,
+    found: &mut HashSet<usize>,
 ) -> bool {
     match input.and_then(parse_input) {
         Some(InputValue::Number(_) | InputValue::String(_)) => true,
-        Some(InputValue::VariableReference(reference)) => variables.get(reference.id).is_some_and(|variable| { found.insert(variable.slot); true }),
+        Some(InputValue::VariableReference(reference)) => {
+            variables.get(reference.id).is_some_and(|variable| {
+                found.insert(variable.slot);
+                true
+            })
+        }
         Some(InputValue::BlockReference(id)) => {
-            if !active.insert(id.to_owned()) { return false; }
-            let result = target.blocks.get(id).is_some_and(|block| match block.opcode.as_str() {
-                "data_variable" => variable_field(block, "VARIABLE", variables).is_some_and(|variable| { found.insert(variable.slot); true }),
-                "operator_add" | "operator_subtract" | "operator_multiply" | "operator_divide" => {
-                    collect_list_index_variables(target, block.inputs.get("NUM1"), variables, active, found)
-                        && collect_list_index_variables(target, block.inputs.get("NUM2"), variables, active, found)
-                }
-                "math_number" | "math_integer" | "math_whole_number" | "math_positive_number" | "math_angle" | "text" => true,
-                _ => false,
-            });
+            if !active.insert(id.to_owned()) {
+                return false;
+            }
+            let result = target
+                .blocks
+                .get(id)
+                .is_some_and(|block| match block.opcode.as_str() {
+                    "data_variable" => {
+                        variable_field(block, "VARIABLE", variables).is_some_and(|variable| {
+                            found.insert(variable.slot);
+                            true
+                        })
+                    }
+                    "operator_add" | "operator_subtract" | "operator_multiply"
+                    | "operator_divide" => {
+                        collect_list_index_variables(
+                            target,
+                            block.inputs.get("NUM1"),
+                            variables,
+                            active,
+                            found,
+                        ) && collect_list_index_variables(
+                            target,
+                            block.inputs.get("NUM2"),
+                            variables,
+                            active,
+                            found,
+                        )
+                    }
+                    "math_number"
+                    | "math_integer"
+                    | "math_whole_number"
+                    | "math_positive_number"
+                    | "math_angle"
+                    | "text" => true,
+                    _ => false,
+                });
             active.remove(id);
             result
         }
@@ -2787,24 +5543,53 @@ fn collect_list_index_variables(
     }
 }
 
-fn cacheable_list_argument(target: &ScratchTarget, input: Option<&Value>, variables: &HashMap<String, VariableInfo>) -> Option<HashSet<usize>> {
-    let InputValue::BlockReference(id) = input.and_then(parse_input)? else { return None };
+fn cacheable_list_argument(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, VariableInfo>,
+) -> Option<HashSet<usize>> {
+    let InputValue::BlockReference(id) = input.and_then(parse_input)? else {
+        return None;
+    };
     let block = target.blocks.get(id)?;
-    if block.opcode != "data_itemoflist" { return None; }
+    if block.opcode != "data_itemoflist" {
+        return None;
+    }
     let mut found = HashSet::new();
-    collect_list_index_variables(target, block.inputs.get("INDEX"), variables, &mut HashSet::new(), &mut found).then_some(found)
+    collect_list_index_variables(
+        target,
+        block.inputs.get("INDEX"),
+        variables,
+        &mut HashSet::new(),
+        &mut found,
+    )
+    .then_some(found)
 }
 
 // The speculative numeric list read may be retried only when the index
 // expression cannot itself invoke Scratch's random list selector.
-fn index_has_random_selector(target: &ScratchTarget, input: Option<&Value>, active: &mut HashSet<String>) -> bool {
+fn index_has_random_selector(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    active: &mut HashSet<String>,
+) -> bool {
     match input.and_then(parse_input) {
-        Some(InputValue::String(value)) => value.as_str().is_some_and(|text| matches!(text, "random" | "any")),
+        Some(InputValue::String(value)) => value
+            .as_str()
+            .is_some_and(|text| matches!(text, "random" | "any")),
         Some(InputValue::BlockReference(id)) => {
-            if !active.insert(id.to_owned()) { return true; }
+            if !active.insert(id.to_owned()) {
+                return true;
+            }
             let found = target.blocks.get(id).is_none_or(|block| {
-                (block.opcode == "text" && field_value(block, "TEXT").and_then(Value::as_str).is_some_and(|text| matches!(text, "random" | "any")))
-                    || block.inputs.values().any(|nested| index_has_random_selector(target, Some(nested), active))
+                (block.opcode == "text"
+                    && field_value(block, "TEXT")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| matches!(text, "random" | "any")))
+                    || block
+                        .inputs
+                        .values()
+                        .any(|nested| index_has_random_selector(target, Some(nested), active))
             });
             active.remove(id);
             found
@@ -2813,25 +5598,61 @@ fn index_has_random_selector(target: &ScratchTarget, input: Option<&Value>, acti
     }
 }
 
-fn numeric_list_call_candidate(target: &ScratchTarget, block: &ScratchBlock, procedure: &ProcedureSignature, entry: &ProcedureEntry, caches: &[Option<HashSet<usize>>]) -> bool {
-    entry.numeric_direct && !procedure.argument_ids.is_empty() && caches.iter().all(Option::is_some)
+fn numeric_list_call_candidate(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    procedure: &ProcedureSignature,
+    entry: &ProcedureEntry,
+    caches: &[Option<HashSet<usize>>],
+) -> bool {
+    entry.numeric_direct
+        && !procedure.argument_ids.is_empty()
+        && caches.iter().all(Option::is_some)
         && procedure.argument_ids.iter().all(|id| {
-            let Some(InputValue::BlockReference(reporter)) = block.inputs.get(id).and_then(parse_input) else { return false };
-            target.blocks.get(reporter).is_some_and(|reporter| !index_has_random_selector(target, reporter.inputs.get("INDEX"), &mut HashSet::new()))
+            let Some(InputValue::BlockReference(reporter)) =
+                block.inputs.get(id).and_then(parse_input)
+            else {
+                return false;
+            };
+            target.blocks.get(reporter).is_some_and(|reporter| {
+                !index_has_random_selector(
+                    target,
+                    reporter.inputs.get("INDEX"),
+                    &mut HashSet::new(),
+                )
+            })
         })
 }
 
 fn cached_procedure_indexes(
-    target: &ScratchTarget, block: &ScratchBlock, procedure: &ProcedureSignature,
-    entry: &ProcedureEntry, variables: &HashMap<String, VariableInfo>,
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    procedure: &ProcedureSignature,
+    entry: &ProcedureEntry,
+    variables: &HashMap<String, VariableInfo>,
 ) -> (Vec<Option<HashSet<usize>>>, Vec<usize>) {
-    let caches = procedure.argument_ids.iter().map(|id| {
-        if entry.direct_name.is_some() { cacheable_list_argument(target, block.inputs.get(id), variables) } else { None }
-    }).collect::<Vec<_>>();
+    let caches = procedure
+        .argument_ids
+        .iter()
+        .map(|id| {
+            if entry.direct_name.is_some() {
+                cacheable_list_argument(target, block.inputs.get(id), variables)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
     let mut counts = HashMap::<usize, usize>::new();
-    for slots in caches.iter().flatten() { for slot in slots { *counts.entry(*slot).or_default() += 1; } }
+    for slots in caches.iter().flatten() {
+        for slot in slots {
+            *counts.entry(*slot).or_default() += 1;
+        }
+    }
     let numeric_candidate = numeric_list_call_candidate(target, block, procedure, entry, &caches);
-    let mut result = counts.into_iter().filter_map(|(slot, count)| (count >= 2 || numeric_candidate).then_some(slot)).collect::<Vec<_>>();
+    let mut result = counts
+        .into_iter()
+        .filter_map(|(slot, count)| (count >= 2 || numeric_candidate).then_some(slot))
+        .collect::<Vec<_>>();
     result.sort_unstable();
     (caches, result)
 }
@@ -2845,6 +5666,7 @@ fn generate_resumable_procedure_call(
     arguments: &HashMap<String, String>,
     procedures: &[ProcedureSignature],
     entries: &HashMap<String, ProcedureEntry>,
+    no_warp_timer: bool,
     output: &mut String,
     indent: usize,
     emit_continue: bool,
@@ -2864,69 +5686,238 @@ fn generate_resumable_procedure_call(
         return;
     };
 
-    let (argument_caches, cached_slots) = cached_procedure_indexes(target, block, procedure, entry, variables);
-    let raw_values = procedure.argument_ids.iter().enumerate().map(|(index, argument_id)| {
-        let input = block.inputs.get(argument_id);
-        if input.is_none() { return format!("todo!({})", quote(&format!("missing procedure argument {index}"))); }
-        let mut cached_variables;
-        let expression_variables = if let Some(slots) = &argument_caches[index] {
-            cached_variables = variables.clone();
-            for variable in cached_variables.values_mut() {
-                if slots.contains(&variable.slot) && cached_slots.contains(&variable.slot) {
-                    variable.index_read_override = Some(format!("cached_index_{}", variable.slot));
-                }
+    let (argument_caches, cached_slots) =
+        cached_procedure_indexes(target, block, procedure, entry, variables);
+    let raw_values = procedure
+        .argument_ids
+        .iter()
+        .enumerate()
+        .map(|(index, argument_id)| {
+            let input = block.inputs.get(argument_id);
+            if input.is_none() {
+                return format!(
+                    "todo!({})",
+                    quote(&format!("missing procedure argument {index}"))
+                );
             }
-            &cached_variables
-        } else { variables };
-        let value = expression(target, input, expression_variables, lists, arguments, &mut HashSet::new());
-        value
-    }).collect::<Vec<_>>();
-    let values = raw_values.iter().map(|value| format!("({value}).to_owned().into()")).collect::<Vec<_>>();
+            let mut cached_variables;
+            let expression_variables = if let Some(slots) = &argument_caches[index] {
+                cached_variables = variables.clone();
+                for variable in cached_variables.values_mut() {
+                    if slots.contains(&variable.slot) && cached_slots.contains(&variable.slot) {
+                        variable.index_read_override =
+                            Some(format!("cached_index_{}", variable.slot));
+                    }
+                }
+                &cached_variables
+            } else {
+                variables
+            };
+            let value = expression(
+                target,
+                input,
+                expression_variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            value
+        })
+        .collect::<Vec<_>>();
+    let values = raw_values
+        .iter()
+        .map(|value| format!("({value}).to_owned().into()"))
+        .collect::<Vec<_>>();
+    let mut frame_values = values.join(", ");
+    if let Some(direct_warp_name) = &entry.direct_warp_name {
+        debug_assert!(no_warp_timer && emit_continue);
+        line(
+            output,
+            indent,
+            "let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);",
+        );
+        let direct_args = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                line(
+                    output,
+                    indent,
+                    &format!("let direct_warp_arg_{index}: ScratchValue = {value};"),
+                );
+                format!("direct_warp_arg_{index}")
+            })
+            .collect::<Vec<_>>();
+        let direct_args = if direct_args.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", direct_args.join(", "))
+        };
+        line(
+            output,
+            indent,
+            &format!("if inherited_warp || {} {{", procedure.warp),
+        );
+        line(
+            output,
+            indent + 1,
+            &format!(
+                "script.frames.last_mut().unwrap().pc = {};",
+                pc_literal(return_pc)
+            ),
+        );
+        line(
+            output,
+            indent + 1,
+            &format!("{direct_warp_name}(state, clock{direct_args});"),
+        );
+        line(output, indent + 1, "continue;");
+        line(output, indent, "}");
+        frame_values = values
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("direct_warp_arg_{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
     if let Some(direct_name) = &entry.direct_name {
-        line(output, indent, "let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);");
-        line(output, indent, &format!("script.frames.last_mut().unwrap().pc = {};", pc_literal(return_pc)));
+        if !no_warp_timer {
+            line(
+                output,
+                indent,
+                "let inherited_warp = script.frames.last().is_some_and(|frame| frame.warp_mode);",
+            );
+        }
+        line(
+            output,
+            indent,
+            &format!(
+                "script.frames.last_mut().unwrap().pc = {};",
+                pc_literal(return_pc)
+            ),
+        );
         for slot in &cached_slots {
-            if reusable_indexes.is_some_and(|cached| cached.contains(slot)) { continue; }
+            if reusable_indexes.is_some_and(|cached| cached.contains(slot)) {
+                continue;
+            }
             if let Some(variable) = variables.values().find(|variable| variable.slot == *slot) {
-                line(output, indent, &format!("let cached_index_{slot} = CachedListIndex::new({});", variable.read_expression()));
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "let cached_index_{slot} = CachedListIndex::new({});",
+                        variable.read_expression()
+                    ),
+                );
             }
         }
-        let numeric_candidate = numeric_list_call_candidate(target, block, procedure, entry, &argument_caches);
+        let numeric_list_candidate =
+            numeric_list_call_candidate(target, block, procedure, entry, &argument_caches);
+        let numeric_candidate = numeric_list_candidate;
         if numeric_candidate {
-            let guards = cached_slots.iter().map(|slot| format!("cached_index_{slot}.is_numeric()")).collect::<Vec<_>>();
-            let guard = if guards.is_empty() { "true".to_owned() } else { guards.join(" && ") };
+            let guards = cached_slots
+                .iter()
+                .map(|slot| format!("cached_index_{slot}.is_numeric()"))
+                .collect::<Vec<_>>();
+            let guard = if guards.is_empty() {
+                "true".to_owned()
+            } else {
+                guards.join(" && ")
+            };
             let mut item_names = Vec::new();
             for (index, value) in raw_values.iter().enumerate() {
-                if let Some(items) = reusable_items.as_deref_mut() {
+                if let Some(items) = reusable_items
+                    .as_deref_mut()
+                    .filter(|_| numeric_list_candidate)
+                {
                     if !items.contains_key(value) {
-                        let InputValue::BlockReference(id) = block.inputs.get(&procedure.argument_ids[index]).and_then(parse_input).unwrap() else { unreachable!() };
+                        let InputValue::BlockReference(id) = block
+                            .inputs
+                            .get(&procedure.argument_ids[index])
+                            .and_then(parse_input)
+                            .unwrap()
+                        else {
+                            unreachable!()
+                        };
                         let reporter = &target.blocks[id];
                         let list = list_field(reporter, "LIST", lists).unwrap();
-                        let item = CachedNumericItem { name: format!("cached_numeric_item_{}", output.len()), list_slot: list.slot, index_slots: argument_caches[index].clone().unwrap_or_default() };
-                        line(output, indent, &format!("let mut {} = f64::NAN;", item.name));
+                        let item = CachedNumericItem {
+                            name: format!("cached_numeric_item_{}", output.len()),
+                            list_slot: list.slot,
+                            index_slots: argument_caches[index].clone().unwrap_or_default(),
+                        };
+                        line(
+                            output,
+                            indent,
+                            &format!("let mut {} = f64::NAN;", item.name),
+                        );
                         items.insert(value.clone(), item);
                     }
                     item_names.push(Some(items[value].name.clone()));
-                } else { item_names.push(None); }
+                } else {
+                    item_names.push(None);
+                }
             }
             line(output, indent, "let mut numeric_call_completed = false;");
             line(output, indent, &format!("if {guard} {{"));
             for (index, value) in raw_values.iter().enumerate() {
                 let expression = match &item_names[index] {
-                    Some(name) => format!("{{ if {name}.is_nan() {{ {name} = ({value}).number_or_nan(); }} {name} }}"),
+                    Some(name) => format!(
+                        "{{ if {name}.is_nan() {{ {name} = ({value}).number_or_nan(); }} {name} }}"
+                    ),
                     None => format!("({value}).number_or_nan()"),
                 };
-                line(output, indent + 1, &format!("let numeric_value_{index} = {expression};"));
+                line(
+                    output,
+                    indent + 1,
+                    &format!("let numeric_value_{index} = {expression};"),
+                );
             }
-            let numeric_vars = (0..values.len()).map(|index| format!("numeric_value_{index}")).collect::<Vec<_>>();
-            let valid = numeric_vars.iter().map(|name| format!("!{name}.is_nan()")).collect::<Vec<_>>().join(" && ");
+            let numeric_vars = (0..values.len())
+                .map(|index| format!("numeric_value_{index}"))
+                .collect::<Vec<_>>();
+            let valid = numeric_vars
+                .iter()
+                .map(|name| format!("!{name}.is_nan()"))
+                .collect::<Vec<_>>()
+                .join(" && ");
             line(output, indent + 1, &format!("if {valid} {{"));
-            line(output, indent + 2, &format!("if (inherited_warp || {}) && script.warp_budget.expired(clock) {{", procedure.warp));
-            let frame_values = numeric_vars.iter().map(|name| format!("ScratchValue::Number({name})")).collect::<Vec<_>>().join(", ");
-            line(output, indent + 3, &format!("script.frames.push(ProcedureFrame::new({}, {}, vec![0; {}], vec![{frame_values}], inherited_warp || {}));", entry.function_id, pc_literal(entry.start_pc), entry.repeat_count, procedure.warp));
-            line(output, indent + 3, "return ScriptStatus::Yield;");
-            line(output, indent + 2, "}");
-            line(output, indent + 2, &format!("{direct_name}_numbers(state, clock, {});", numeric_vars.join(", ")));
+            if !no_warp_timer {
+                line(
+                    output,
+                    indent + 2,
+                    &format!(
+                        "if (inherited_warp || {}) && script.warp_budget.expired(clock) {{",
+                        procedure.warp
+                    ),
+                );
+                let frame_values = numeric_vars
+                    .iter()
+                    .map(|name| format!("ScratchValue::Number({name})"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                line(
+                    output,
+                    indent + 3,
+                    &format!(
+                        "script.frames.push(ProcedureFrame::new({}, {}, vec![0; {}], vec![{frame_values}], inherited_warp || {}));",
+                        entry.function_id,
+                        pc_literal(entry.start_pc),
+                        entry.repeat_count,
+                        procedure.warp
+                    ),
+                );
+                line(output, indent + 3, "return ScriptStatus::Yield;");
+                line(output, indent + 2, "}");
+            }
+            line(
+                output,
+                indent + 2,
+                &format!(
+                    "{direct_name}_numbers(state, clock, {});",
+                    numeric_vars.join(", ")
+                ),
+            );
             line(output, indent + 2, "numeric_call_completed = true;");
             line(output, indent + 1, "}");
             line(output, indent, "}");
@@ -2934,17 +5925,55 @@ fn generate_resumable_procedure_call(
         }
         let call_indent = indent + usize::from(numeric_candidate);
         for (index, value) in values.iter().enumerate() {
-            line(output, call_indent, &format!("let direct_arg_{index}: ScratchValue = {value};"));
+            line(
+                output,
+                call_indent,
+                &format!("let direct_arg_{index}: ScratchValue = {value};"),
+            );
         }
-        let args = (0..values.len()).map(|index| format!("direct_arg_{index}")).collect::<Vec<_>>();
-        line(output, call_indent, &format!("if (inherited_warp || {}) && script.warp_budget.expired(clock) {{", procedure.warp));
-        line(output, call_indent + 1, &format!("script.frames.push(ProcedureFrame::new({}, {}, vec![0; {}], vec![{}], inherited_warp || {}));", entry.function_id, pc_literal(entry.start_pc), entry.repeat_count, args.join(", "), procedure.warp));
-        line(output, call_indent + 1, "return ScriptStatus::Yield;");
-        line(output, call_indent, "}");
-        let arguments = if args.is_empty() { String::new() } else { format!(", {}", args.join(", ")) };
-        line(output, call_indent, &format!("{direct_name}(state, clock{arguments});"));
-        if numeric_candidate { line(output, indent, "}"); }
-        if emit_continue { line(output, indent, "continue;"); }
+        let args = (0..values.len())
+            .map(|index| format!("direct_arg_{index}"))
+            .collect::<Vec<_>>();
+        if !no_warp_timer {
+            line(
+                output,
+                call_indent,
+                &format!(
+                    "if (inherited_warp || {}) && script.warp_budget.expired(clock) {{",
+                    procedure.warp
+                ),
+            );
+            line(
+                output,
+                call_indent + 1,
+                &format!(
+                    "script.frames.push(ProcedureFrame::new({}, {}, vec![0; {}], vec![{}], inherited_warp || {}));",
+                    entry.function_id,
+                    pc_literal(entry.start_pc),
+                    entry.repeat_count,
+                    args.join(", "),
+                    procedure.warp
+                ),
+            );
+            line(output, call_indent + 1, "return ScriptStatus::Yield;");
+            line(output, call_indent, "}");
+        }
+        let arguments = if args.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", args.join(", "))
+        };
+        line(
+            output,
+            call_indent,
+            &format!("{direct_name}(state, clock{arguments});"),
+        );
+        if numeric_candidate {
+            line(output, indent, "}");
+        }
+        if emit_continue {
+            line(output, indent, "continue;");
+        }
         return;
     }
     let inherited_warp = procedure.warp;
@@ -2969,7 +5998,7 @@ fn generate_resumable_procedure_call(
             entry.function_id,
             pc_literal(entry.start_pc),
             entry.repeat_count,
-            values.join(", "),
+            frame_values,
             inherited_warp
         ),
     );
@@ -2983,11 +6012,13 @@ fn generate_resumable_procedure_call(
         indent,
         "if recursive_call && !script.frames.last().unwrap().warp_mode { return ScriptStatus::Yield; }",
     );
-    line(
-        output,
-        indent,
-        "if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }",
-    );
+    if !no_warp_timer {
+        line(
+            output,
+            indent,
+            "if script.frames.last().unwrap().warp_mode && script.warp_budget_expired(clock) { return ScriptStatus::Yield; }",
+        );
+    }
     line(output, indent, "continue;");
 }
 
@@ -3240,7 +6271,10 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
+                    &format!(
+                        "state.list_changed_result({}, scratch_list_changed);",
+                        list.slot
+                    ),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -3271,7 +6305,10 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
+                    &format!(
+                        "state.list_changed_result({}, scratch_list_changed);",
+                        list.slot
+                    ),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -3290,7 +6327,10 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
+                    &format!(
+                        "state.list_changed_result({}, scratch_list_changed);",
+                        list.slot
+                    ),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -3322,8 +6362,8 @@ fn generate_resumable_statement(
                         indent,
                         &format!(
                             "let scratch_list_changed = if let Some((scratch_list_index, scratch_list_item)) = scratch_list_numeric_pair {{ state.list_mut({}).replace_number(scratch_list_index, scratch_list_item) }} else {{ let scratch_list_index: ScratchValue = ({}).clone(); let scratch_list_item: ScratchValue = ({}).clone(); state.list_mut({}).replace(scratch_list_index, scratch_list_item) }};",
-                            list.slot
-                            , index.read_expression(),
+                            list.slot,
+                            index.read_expression(),
                             item.read_expression(),
                             list.slot
                         ),
@@ -3364,7 +6404,10 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
+                    &format!(
+                        "state.list_changed_result({}, scratch_list_changed);",
+                        list.slot
+                    ),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -3417,8 +6460,8 @@ fn generate_resumable_statement(
                     } else {
                         "set_local_number"
                     };
-                    if let Some(source_variable) =
-                        variable_input_info(target, input, variables).filter(|source| source.numeric)
+                    if let Some(source_variable) = variable_input_info(target, input, variables)
+                        .filter(|source| source.numeric)
                     {
                         let source = source_variable.read_expression();
                         line(
@@ -3437,7 +6480,9 @@ fn generate_resumable_statement(
                             &format!("state.{setter}({}, {value});", variable.slot),
                         );
                     }
-                } else if let Some(source) = variable_input(target, input, variables, lists, arguments) {
+                } else if let Some(source) =
+                    variable_input(target, input, variables, lists, arguments)
+                {
                     line(
                         output,
                         indent,

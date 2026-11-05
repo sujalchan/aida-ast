@@ -19,9 +19,10 @@ mod project;
 mod scripts;
 mod statements;
 
-pub use project::generate_with_list_data;
 #[cfg(test)]
-pub use project::{generate, generate_with_options};
+pub use project::{generate, generate_with_list_data, generate_with_options};
+#[cfg(not(test))]
+pub use project::generate_with_list_data;
 
 #[cfg(test)]
 mod tests {
@@ -358,18 +359,10 @@ mod tests {
         assert!(output.contains("sensing_online"));
         assert!(output.contains("value: ScratchValue = (false).into()"));
         // assert the generated reporter key and local binding separately to avoid formatting coupling.
-        assert!(output.contains(
-            "__reporter/Stage/sensing_current/current_year\".to_owned()"
-        ));
-        assert!(output.contains(
-            "value: ScratchValue = (self.state.current_year()).into()"
-        ));
-        assert!(output.contains(
-            "__reporter/Stage/sensing_username/sensing_username\".to_owned()"
-        ));
-        assert!(output.contains(
-            "value: ScratchValue = (self.state.username()).into()"
-        ));
+        assert!(output.contains("__reporter/Stage/sensing_current/current_year\".to_owned()"));
+        assert!(output.contains("value: ScratchValue = (self.state.current_year()).into()"));
+        assert!(output.contains("__reporter/Stage/sensing_username/sensing_username\".to_owned()"));
+        assert!(output.contains("value: ScratchValue = (self.state.username()).into()"));
         assert!(output.contains("ReporterSnapshot"));
         assert!(output.contains("pub fn has_live_sensing_monitors(&self) -> bool { true }"));
         assert!(!output.contains("unsupported reporter: sensing_dayssince2000"));
@@ -730,16 +723,8 @@ mod tests {
         let output = generate(&project);
 
         // position reporters now use the target-aware state accessors directly.
-        assert!(
-            output.contains(
-                "state.x_position()"
-            )
-        );
-        assert!(
-            output.contains(
-                "state.y_position()"
-            )
-        );
+        assert!(output.contains("state.x_position()"));
+        assert!(output.contains("state.y_position()"));
     }
 
     #[test]
@@ -1770,5 +1755,47 @@ mod tests {
         assert!(output.contains("return ScriptStatus::Yield;"));
         assert!(!output.contains("unsupported statement: sound_"));
         assert!(!output.contains("unsupported reporter: sound_"));
+    }
+
+    #[test]
+    fn structured_loop_merges_nested_numeric_branches_and_commits_before_yield() {
+        let project = parse_project(&json!({
+            "targets": [{
+                "name": "Sprite1", "isStage": false,
+                "variables": {"counter": ["counter", "0"], "flag": ["flag", "0"], "copy": ["copy", ""]},
+                "blocks": {
+                    "hat": {"opcode": "event_whenflagclicked", "next": "repeat", "topLevel": true, "inputs": {}, "fields": {}},
+                    "repeat": {"opcode": "control_repeat", "inputs": {"TIMES": [1, [4, "3"]], "SUBSTACK": [2, "if"]}, "fields": {}},
+                    "if": {"opcode": "control_if_else", "next": "change", "inputs": {"CONDITION": [2, "equal"], "SUBSTACK": [2, "yes"], "SUBSTACK2": [2, "no"]}, "fields": {}},
+                    "equal": {"opcode": "operator_equals", "inputs": {"OPERAND1": [3, [12, "flag", "flag"], [4, "0"]], "OPERAND2": [1, [4, "0"]]}, "fields": {}},
+                    "yes": {"opcode": "data_setvariableto", "inputs": {"VALUE": [1, [10, "1"]]}, "fields": {"VARIABLE": ["flag", "flag"]}},
+                    "no": {"opcode": "data_setvariableto", "inputs": {"VALUE": [1, [10, "0"]]}, "fields": {"VARIABLE": ["flag", "flag"]}},
+                    "change": {"opcode": "data_changevariableby", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["counter", "counter"]}}
+                }
+            }]
+        }).to_string()).unwrap();
+        let output = generate(&project);
+        assert!(output.contains("state.can_defer_variable_writes(&[1, 2])"));
+        assert!(output.contains("scratch_typed_2 = 1.0_f64;"));
+        assert!(output.contains("scratch_typed_2 = 0.0_f64;"));
+        assert!(output.contains("scratch_dirty_1 = true;"));
+        let normalized = output.split_whitespace().collect::<Vec<_>>().join(" ");
+        let yield_branch = normalized
+            .split("if !scratch_warp_mode || script.warp_budget.expired(clock) {")
+            .nth(1)
+            .unwrap();
+        let before_yield = yield_branch
+            .split("return ScriptStatus::Yield;")
+            .next()
+            .unwrap();
+        assert!(
+            before_yield
+                .contains("if scratch_dirty_1 { state.set_local_number(1, scratch_typed_1); }")
+        );
+        assert!(before_yield.contains("ScratchValue::Text(scratch_string(scratch_typed_2))"));
+        assert!(
+            output.contains("state.change_local_number(1, scratch_change);"),
+            "dynamic fallback must remain"
+        );
     }
 }

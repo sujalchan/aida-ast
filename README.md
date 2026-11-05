@@ -36,6 +36,18 @@ cargo build --release -p aida-runtime &&
 ./target/release/aida-runtime --turbo
 ```
 
+`--no-warp-timer` is another independent generator option. It omits automatic
+time-budget checks from warp execution while retaining explicit suspensions
+and ordinary non-warp loop yields:
+
+```sh
+cargo run --release -p aida-ast -- --no-warp-timer --runtime aida-runtime/src/program.rs path/to/project.sb3
+```
+
+The generated module selects this behavior; do not pass the option to
+`aida-runtime`. A warp loop stopped by another script may starve that script
+and remain active indefinitely.
+
 `--turbo` removes host frame pacing; it does not skip Scratch waits. The runtime
 also accepts `--fps <number>` to set a frame rate. See the [AIDA run guide](../README.md)
 for the combined launcher and more examples.
