@@ -849,10 +849,7 @@ fn generate_warp_repeat_list_append(
     line(
         output,
         indent + 3,
-        &format!(
-            "state.list_changed_result({}, scratch_list_changed);",
-            list.slot
-        ),
+        &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
     );
     line(
         output,
@@ -941,6 +938,22 @@ fn generate_resumable_block_chain(
         );
         return;
     };
+    if let Some(plan) = fused_repeat_plan(target, block, variables) {
+        emitted_blocks.insert(id.to_owned());
+        emitted_blocks.extend(plan.blocks.iter().cloned());
+        generate_fused_repeat_loop(
+            target,
+            id,
+            block,
+            graph,
+            variables,
+            lists,
+            arguments,
+            &plan,
+            output,
+        );
+        return;
+    }
     if let Some(plan) = numeric_loop_plan(target, block, variables) {
         emitted_blocks.insert(id.to_owned());
         emitted_blocks.extend(plan.body.iter().cloned());
@@ -1015,6 +1028,988 @@ fn generate_resumable_block_chain(
     );
     line(output, 5, "continue;");
     line(output, 4, "},");
+}
+
+struct FusedRepeatPlan {
+    body: Vec<String>,
+    blocks: Vec<String>,
+    local_random: bool,
+}
+
+// fuse synchronous repeat bodies to avoid one program-counter dispatch per block.
+fn fused_repeat_plan(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+) -> Option<FusedRepeatPlan> {
+    if block.opcode != "control_repeat" {
+        return None;
+    }
+    let mut body = Vec::new();
+    let mut blocks = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = block
+        .inputs
+        .get("SUBSTACK")
+        .and_then(parse_input)
+        .and_then(|input| match input {
+            InputValue::BlockReference(id) => Some(id.to_owned()),
+            _ => None,
+        });
+    while let Some(id) = current {
+        if !seen.insert(id.clone()) {
+            return None;
+        }
+        let statement = target.blocks.get(&id)?;
+        match statement.opcode.as_str() {
+            "data_setvariableto" | "data_changevariableby" | "data_replaceitemoflist" => {}
+            "control_if" => {
+                if !fused_repeat_branch(target, statement)? {
+                    return None;
+                }
+                let mut branch = statement
+                    .inputs
+                    .get("SUBSTACK")
+                    .and_then(parse_input)
+                    .and_then(|input| match input {
+                        InputValue::BlockReference(id) => Some(id.to_owned()),
+                        _ => None,
+                    });
+                while let Some(branch_id) = branch {
+                    if !seen.insert(branch_id.clone()) {
+                        return None;
+                    }
+                    let branch_block = target.blocks.get(&branch_id)?;
+                    blocks.push(branch_id);
+                    branch = branch_block.next.clone();
+                }
+            }
+            _ => return None,
+        }
+        blocks.push(id.clone());
+        body.push(id.clone());
+        current = statement.next.clone();
+    }
+    if body.is_empty() {
+        return None;
+    }
+    let local_random = blocks.iter().any(|id| {
+        target.blocks.get(id).is_some_and(|statement| {
+            statement.inputs.values().any(|input| {
+                reporter_contains_opcode(target, input, "operator_random", &mut HashSet::new())
+            })
+        })
+    });
+    if local_random
+        && blocks.iter().any(|id| {
+            target.blocks.get(id).is_some_and(|statement| {
+                !fused_random_inputs_safe(target, statement, variables)
+            })
+        })
+    {
+        return None;
+    }
+    if local_random && !fused_random_assignment_order_safe(target, &body, variables) {
+        return None;
+    }
+    Some(FusedRepeatPlan {
+        body,
+        blocks,
+        local_random,
+    })
+}
+
+// ensure random-borrowed list operations see values written numerically earlier in the loop.
+fn fused_random_assignment_order_safe(
+    target: &ScratchTarget,
+    body: &[String],
+    variables: &HashMap<String, VariableInfo>,
+) -> bool {
+    let mut numeric_slots = HashSet::new();
+    for id in body {
+        let Some(statement) = target.blocks.get(id) else {
+            return false;
+        };
+        match statement.opcode.as_str() {
+            "data_setvariableto" => {
+                let Some(variable) = variable_field(statement, "VARIABLE", variables) else {
+                    return false;
+                };
+                let Some(value) = statement.inputs.get("VALUE") else {
+                    return false;
+                };
+                if variable.numeric
+                    && reporter_contains_opcode(
+                        target,
+                        value,
+                        "operator_random",
+                        &mut HashSet::new(),
+                    )
+                {
+                    numeric_slots.insert(variable.slot);
+                }
+            }
+            "data_changevariableby" => {
+                let Some(variable) = variable_field(statement, "VARIABLE", variables) else {
+                    return false;
+                };
+                numeric_slots.insert(variable.slot);
+            }
+            "data_replaceitemoflist" => {
+                for input in ["INDEX", "ITEM"] {
+                    let Some(variable) =
+                        variable_input_info(target, statement.inputs.get(input), variables)
+                    else {
+                        return false;
+                    };
+                    if !variable.numeric || !numeric_slots.contains(&variable.slot) {
+                        return false;
+                    }
+                }
+            }
+            "control_if" => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+// locate reporter opcodes through connected inputs without changing their evaluation order.
+fn reporter_contains_opcode(
+    target: &ScratchTarget,
+    input: &Value,
+    opcode: &str,
+    active: &mut HashSet<String>,
+) -> bool {
+    let Some(InputValue::BlockReference(id)) = parse_input(input) else {
+        return false;
+    };
+    if !active.insert(id.to_owned()) {
+        return false;
+    }
+    let found = target.blocks.get(id).is_some_and(|block| {
+        block.opcode == opcode
+            || block
+                .inputs
+                .values()
+                .any(|nested| reporter_contains_opcode(target, nested, opcode, active))
+    });
+    active.remove(id);
+    found
+}
+
+// keep local random borrowing away from list selectors that can draw randomness internally.
+fn fused_random_inputs_safe(
+    target: &ScratchTarget,
+    statement: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+) -> bool {
+    if statement.opcode == "data_replaceitemoflist"
+        && !variable_input_info(target, statement.inputs.get("INDEX"), variables)
+            .zip(variable_input_info(target, statement.inputs.get("ITEM"), variables))
+            .is_some_and(|(index, item)| index.numeric && item.numeric)
+    {
+        return false;
+    }
+    for input in statement.inputs.values() {
+        if !fused_random_input_safe(target, input, variables, &mut HashSet::new()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn fused_random_input_safe(
+    target: &ScratchTarget,
+    input: &Value,
+    variables: &HashMap<String, VariableInfo>,
+    active: &mut HashSet<String>,
+) -> bool {
+    let Some(InputValue::BlockReference(id)) = parse_input(input) else {
+        return true;
+    };
+    if !active.insert(id.to_owned()) {
+        return false;
+    }
+    let safe = target.blocks.get(id).is_some_and(|block| {
+        let list_index_is_dynamic = block.opcode == "data_itemoflist"
+            && !variable_input_info(target, block.inputs.get("INDEX"), variables)
+                .is_some_and(|index| index.numeric);
+        !list_index_is_dynamic
+            && block
+                .inputs
+                .values()
+                .all(|nested| fused_random_input_safe(target, nested, variables, active))
+    });
+    active.remove(id);
+    safe
+}
+
+// permit only non-suspending display and stop blocks in an inline conditional branch.
+fn fused_repeat_branch(target: &ScratchTarget, block: &ScratchBlock) -> Option<bool> {
+    if block.inputs.get("CONDITION").is_none() {
+        return Some(false);
+    }
+    let mut current = block
+        .inputs
+        .get("SUBSTACK")
+        .and_then(parse_input)
+        .and_then(|input| match input {
+            InputValue::BlockReference(id) => Some(id),
+            _ => None,
+        });
+    while let Some(id) = current {
+        let nested = target.blocks.get(id)?;
+        match nested.opcode.as_str() {
+            "looks_say" | "looks_think" => {}
+            "control_stop"
+                if field_value(nested, "STOP_OPTION").and_then(Value::as_str) == Some("all") => {}
+            _ => return Some(false),
+        }
+        current = nested.next.as_deref();
+    }
+    Some(true)
+}
+
+struct FusedReplacementCompare {
+    expected: VariableInfo,
+    negated: bool,
+}
+
+// fuse an immediate list read/equality with its preceding replacement without caching list state.
+fn fused_replacement_compare(
+    target: &ScratchTarget,
+    replacement: &ScratchBlock,
+    condition: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+) -> Option<FusedReplacementCompare> {
+    let condition = condition
+        .inputs
+        .get("CONDITION")
+        .and_then(parse_input)
+        .and_then(|input| match input {
+            InputValue::BlockReference(id) => target.blocks.get(id),
+            _ => None,
+        })?;
+    let (comparison, negated) = if condition.opcode == "operator_not" {
+        let comparison = condition
+            .inputs
+            .get("OPERAND")
+            .and_then(parse_input)
+            .and_then(|input| match input {
+                InputValue::BlockReference(id) => target.blocks.get(id),
+                _ => None,
+            })?;
+        (comparison, true)
+    } else {
+        (condition, false)
+    };
+    if comparison.opcode != "operator_equals" {
+        return None;
+    }
+    let replaced_list = list_field(replacement, "LIST", lists)?;
+    let replaced_index = variable_input_info(target, replacement.inputs.get("INDEX"), variables)?;
+    for (item_input, expected_input) in [
+        ("OPERAND1", "OPERAND2"),
+        ("OPERAND2", "OPERAND1"),
+    ] {
+        let InputValue::BlockReference(id) = parse_input(comparison.inputs.get(item_input)?)? else {
+            continue;
+        };
+        let item_reporter = target.blocks.get(id)?;
+        if item_reporter.opcode != "data_itemoflist"
+            || list_field(item_reporter, "LIST", lists)?.slot != replaced_list.slot
+        {
+            continue;
+        }
+        let item_index = variable_input_info(target, item_reporter.inputs.get("INDEX"), variables)?;
+        let expected = variable_input_info(target, comparison.inputs.get(expected_input), variables)?;
+        if replaced_index.slot == item_index.slot
+            && replaced_index.numeric
+            && item_index.numeric
+            && expected.numeric
+        {
+            return Some(FusedReplacementCompare { expected, negated });
+        }
+    }
+    None
+}
+
+// Only batch a closed synchronous body: two constant-bound random writes,
+// an immediate replacement/read comparison, a literal-only branch, and a
+// constant variable increment. No operation in this body can inspect the
+// temporarily borrowed list through ScratchState or suspend the script.
+struct NumericReplacementBatch {
+    list_slot: usize,
+    index_slot: usize,
+    item_slot: usize,
+    expected_slot: usize,
+}
+
+fn numeric_replacement_batch(
+    target: &ScratchTarget,
+    plan: &FusedRepeatPlan,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+) -> Option<NumericReplacementBatch> {
+    if !plan.local_random || plan.body.len() != 5 {
+        return None;
+    }
+    let blocks: Vec<_> = plan.body.iter().map(|id| &target.blocks[id]).collect();
+    if blocks[0].opcode != "data_setvariableto"
+        || blocks[1].opcode != "data_setvariableto"
+        || blocks[2].opcode != "data_replaceitemoflist"
+        || blocks[3].opcode != "control_if"
+        || blocks[4].opcode != "data_changevariableby"
+    {
+        return None;
+    }
+    let mut assigned = HashSet::new();
+    for block in &blocks[..2] {
+        let variable = variable_field(block, "VARIABLE", variables)?;
+        let InputValue::BlockReference(id) = parse_input(block.inputs.get("VALUE")?)? else {
+            return None;
+        };
+        if !variable.numeric
+            || !assigned.insert(variable.slot)
+            || constant_random_bounds(target, target.blocks.get(id)?).is_none()
+        {
+            return None;
+        }
+    }
+    constant_numeric_input(target, blocks[4].inputs.get("VALUE"), &mut HashSet::new())?;
+    variable_field(blocks[4], "VARIABLE", variables)?;
+    let list = list_field(blocks[2], "LIST", lists)?;
+    let index = variable_input_info(target, blocks[2].inputs.get("INDEX"), variables)?;
+    let item = variable_input_info(target, blocks[2].inputs.get("ITEM"), variables)?;
+    let compare = fused_replacement_compare(target, blocks[2], blocks[3], variables, lists)?;
+    if !list.is_stage
+        || !assigned.contains(&index.slot)
+        || !assigned.contains(&item.slot)
+        || !assigned.contains(&compare.expected.slot)
+    {
+        return None;
+    }
+    let mut branch = blocks[3]
+        .inputs
+        .get("SUBSTACK")
+        .and_then(parse_input)
+        .and_then(|input| match input {
+            InputValue::BlockReference(id) => Some(id),
+            _ => None,
+        });
+    while let Some(id) = branch {
+        let nested = target.blocks.get(id)?;
+        if matches!(nested.opcode.as_str(), "looks_say" | "looks_think")
+            && !matches!(
+                nested.inputs.get("MESSAGE").and_then(parse_input),
+                Some(InputValue::String(_) | InputValue::Number(_))
+            )
+        {
+            return None;
+        }
+        branch = nested.next.as_deref();
+    }
+    Some(NumericReplacementBatch {
+        list_slot: list.slot,
+        index_slot: index.slot,
+        item_slot: item.slot,
+        expected_slot: compare.expected.slot,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_fused_repeat_loop(
+    target: &ScratchTarget,
+    id: &str,
+    block: &ScratchBlock,
+    graph: &ScriptGraph,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    plan: &FusedRepeatPlan,
+    output: &mut String,
+) {
+    let pc = graph.block_pcs[id];
+    let next_pc = block
+        .next
+        .as_ref()
+        .and_then(|next| graph.block_pcs.get(next).copied())
+        .unwrap_or(graph.fallthrough_pcs[id]);
+    let repeat_slot = graph.repeat_slots[id];
+    let times = expression(
+        target,
+        block.inputs.get("TIMES"),
+        variables,
+        lists,
+        arguments,
+        &mut HashSet::new(),
+    );
+
+    line(output, 4, &format!("{pc} => {{"));
+    line(
+        output,
+        5,
+        "let scratch_warp_mode = script.frames.last().is_some_and(|frame| frame.warp_mode);",
+    );
+    line(
+        output,
+        5,
+        "if !scratch_warp_mode { script.warp_budget.reset(); }",
+    );
+    line(
+        output,
+        5,
+        &format!(
+            "let mut repeat_remaining = script.frames.last().unwrap().repeat_counts[{repeat_slot}];"
+        ),
+    );
+    line(output, 5, "if repeat_remaining == 0 {");
+    line(
+        output,
+        6,
+        &format!("repeat_remaining = scratch_round({times}).max(0.0) as usize;"),
+    );
+    line(
+        output,
+        6,
+        &format!(
+            "script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_remaining;"
+        ),
+    );
+    line(output, 5, "}");
+    line(output, 5, "if repeat_remaining == 0 {");
+    line(
+        output,
+        6,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = {};",
+            pc_literal(next_pc)
+        ),
+    );
+    line(output, 6, "continue;");
+    line(output, 5, "}");
+    let batch = numeric_replacement_batch(target, plan, variables, lists);
+    if plan.local_random {
+        if let Some(batch) = &batch {
+            line(
+                output,
+                5,
+                &format!(
+                    "let scratch_fused_status = state.with_stage_numeric_list_batch({}, |state, scratch_batch| {{ with_scratch_random(|loop_random| {{",
+                    batch.list_slot
+                ),
+            );
+        } else {
+            line(
+                output,
+                5,
+                "let scratch_fused_status = with_scratch_random(|loop_random| {",
+            );
+        }
+        line(output, 6, "loop {");
+    } else {
+        line(output, 5, "loop {");
+    }
+    let loop_indent = if plan.local_random { 6 } else { 5 };
+    let body_indent = loop_indent + 1;
+    for (step_index, statement_id) in plan.body.iter().enumerate() {
+        let statement = &target.blocks[statement_id];
+        let following_compare = statement
+            .next
+            .as_ref()
+            .and_then(|next| target.blocks.get(next))
+            .filter(|next| next.opcode == "control_if")
+            .and_then(|next| fused_replacement_compare(target, statement, next, variables, lists));
+        let previous_compare = step_index
+            .checked_sub(1)
+            .and_then(|previous| target.blocks.get(&plan.body[previous]))
+            .filter(|previous| previous.opcode == "data_replaceitemoflist")
+            .and_then(|previous| {
+                fused_replacement_compare(target, previous, statement, variables, lists)
+            });
+        if let Some(batch) = &batch {
+            if step_index < 2 {
+                let variable = variable_field(statement, "VARIABLE", variables).unwrap();
+                let value = fused_random_expression(
+                    expression(
+                        target,
+                        statement.inputs.get("VALUE"),
+                        variables,
+                        lists,
+                        arguments,
+                        &mut HashSet::new(),
+                    ),
+                    true,
+                );
+                let setter = if variable.is_stage {
+                    "set_shared_number"
+                } else {
+                    "set_existing_local_number"
+                };
+                line(
+                    output,
+                    body_indent,
+                    &format!(
+                        "let scratch_batch_value_{} = {value}; state.{setter}({}, scratch_batch_value_{});",
+                        variable.slot, variable.slot, variable.slot
+                    ),
+                );
+                continue;
+            }
+            if step_index == 2 {
+                line(
+                    output,
+                    body_indent,
+                    &format!(
+                        "let (scratch_list_changed, scratch_list_replace_matches) = scratch_batch.replace_number_and_equals(scratch_batch_value_{}, scratch_batch_value_{}, scratch_batch_value_{}); state.list_changed_result({}, scratch_list_changed);",
+                        batch.index_slot, batch.item_slot, batch.expected_slot, batch.list_slot
+                    ),
+                );
+                continue;
+            }
+        }
+        match statement.opcode.as_str() {
+            "data_setvariableto" => generate_fused_set_variable(
+                target,
+                statement,
+                variables,
+                lists,
+                arguments,
+                plan.local_random,
+                output,
+                body_indent,
+            ),
+            "data_changevariableby" => generate_fused_change_variable(
+                target,
+                statement,
+                variables,
+                lists,
+                arguments,
+                plan.local_random,
+                output,
+                body_indent,
+            ),
+            "data_replaceitemoflist" => generate_fused_replace_item(
+                target,
+                statement,
+                variables,
+                lists,
+                arguments,
+                plan.local_random,
+                following_compare.as_ref(),
+                output,
+                body_indent,
+            ),
+            "control_if" => generate_fused_if(
+                target,
+                statement,
+                variables,
+                lists,
+                arguments,
+                plan.local_random,
+                previous_compare.as_ref(),
+                output,
+                body_indent,
+            ),
+            _ => unreachable!("fused repeat plan only contains validated statements"),
+        }
+    }
+    line(output, body_indent, "repeat_remaining -= 1;");
+    line(output, body_indent, "if repeat_remaining == 0 {");
+    line(
+        output,
+        body_indent + 1,
+        &format!("script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = 0;"),
+    );
+    line(
+        output,
+        body_indent + 1,
+        &format!(
+            "script.frames.last_mut().unwrap().pc = {};",
+            pc_literal(next_pc)
+        ),
+    );
+    line(
+        output,
+        body_indent + 1,
+        if plan.local_random {
+            "if script.yield_at_safe_point(clock) { return Some(ScriptStatus::Yield); }"
+        } else {
+            "if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }"
+        },
+    );
+    line(output, body_indent + 1, "break;");
+    line(output, body_indent, "}");
+    line(
+        output,
+        body_indent,
+        "if script.yield_at_safe_point(clock) {",
+    );
+    line(
+        output,
+        body_indent + 1,
+        &format!(
+            "script.frames.last_mut().unwrap().repeat_counts[{repeat_slot}] = repeat_remaining;"
+        ),
+    );
+    line(
+        output,
+        body_indent + 1,
+        &format!("script.frames.last_mut().unwrap().pc = {pc};"),
+    );
+    line(
+        output,
+        body_indent + 1,
+        if plan.local_random {
+            "return Some(ScriptStatus::Yield);"
+        } else {
+            "return ScriptStatus::Yield;"
+        },
+    );
+    line(output, body_indent, "}");
+    line(output, loop_indent, "}");
+    if plan.local_random {
+        line(output, 6, "None");
+        line(output, 5, if batch.is_some() { "}) });" } else { "});" });
+        line(
+            output,
+            5,
+            "if let Some(scratch_fused_status) = scratch_fused_status { return scratch_fused_status; }",
+        );
+    }
+    line(output, 5, "continue;");
+    line(output, 4, "},");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_fused_set_variable(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    local_random: bool,
+    output: &mut String,
+    indent: usize,
+) {
+    if let Some(variable) = variable_field(block, "VARIABLE", variables) {
+        let input = block.inputs.get("VALUE");
+        let value = fused_random_expression(
+            expression(target, input, variables, lists, arguments, &mut HashSet::new()),
+            local_random,
+        );
+        if variable.numeric {
+            let setter = if variable.is_stage {
+                "set_shared_number"
+            } else {
+                "set_local_number"
+            };
+            if let Some(source) = variable_input_info(target, input, variables)
+                .filter(|source| source.numeric)
+            {
+                let source = source.read_expression();
+                line(
+                    output,
+                    indent,
+                    &format!(
+                        "if let ScratchValue::Number(scratch_numeric_value) = {source} {{ state.{setter}({}, *scratch_numeric_value); }} else {{ let scratch_new_value: ScratchValue = ({source}).clone(); {} }}",
+                        variable.slot,
+                        variable.write_statement("scratch_new_value")
+                    ),
+                );
+            } else {
+                line(
+                    output,
+                    indent,
+                    &format!("state.{setter}({}, {value});", variable.slot),
+                );
+            }
+        } else if let Some(source) = variable_input(target, input, variables, lists, arguments) {
+            line(
+                output,
+                indent,
+                &format!("let scratch_new_value: ScratchValue = ({source}).clone();"),
+            );
+            line(output, indent, &variable.write_statement("scratch_new_value"));
+        } else {
+            line(
+                output,
+                indent,
+                &format!("let scratch_new_value: ScratchValue = ({value}).into();"),
+            );
+            line(output, indent, &variable.write_statement("scratch_new_value"));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_fused_change_variable(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    local_random: bool,
+    output: &mut String,
+    indent: usize,
+) {
+    if let Some(variable) = variable_field(block, "VARIABLE", variables) {
+        let value = fused_random_expression(
+            expression(
+                target,
+                block.inputs.get("VALUE"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            ),
+            local_random,
+        );
+        let method = if variable.is_stage {
+            "change_shared_number"
+        } else {
+            "change_local_number"
+        };
+        line(
+            output,
+            indent,
+            &format!("state.{method}({}, scratch_to_number({value}));", variable.slot),
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_fused_replace_item(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    local_random: bool,
+    compare: Option<&FusedReplacementCompare>,
+    output: &mut String,
+    indent: usize,
+) {
+    if let Some(list) = list_field(block, "LIST", lists) {
+        let index_input = block.inputs.get("INDEX");
+        let item_input = block.inputs.get("ITEM");
+        if let Some(compare) = compare {
+            let index = variable_input_info(target, index_input, variables)
+                .expect("fused replacement index was validated");
+            let item = variable_input_info(target, item_input, variables)
+                .expect("fused replacement value was validated");
+            line(
+                output,
+                indent,
+                &format!(
+                    "let scratch_list_replace_inputs = match (state.get({}), state.get({}), state.get({})) {{ (ScratchValue::Number(scratch_index), ScratchValue::Number(scratch_item), ScratchValue::Number(scratch_expected)) => Some((*scratch_index, *scratch_item, *scratch_expected)), _ => None }}; let scratch_list_replace_result = scratch_list_replace_inputs.map(|(scratch_index, scratch_item, scratch_expected)| state.list_mut({}).replace_number_and_equals(scratch_index, scratch_item, scratch_expected));",
+                    index.slot,
+                    item.slot,
+                    compare.expected.slot,
+                    list.slot
+                ),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "let (scratch_list_changed, scratch_list_replace_matches) = scratch_list_replace_result.unwrap_or_else(|| {{ let scratch_list_index: ScratchValue = ({}).clone(); let scratch_list_item: ScratchValue = ({}).clone(); let scratch_expected: ScratchValue = ({}).clone(); let scratch_list_changed = state.list_mut({}).replace(scratch_list_index.clone(), scratch_list_item); let scratch_list_replace_matches = scratch_equals(state.list({}).get(&scratch_list_index), &scratch_expected); (scratch_list_changed, scratch_list_replace_matches) }});",
+                    index.read_expression(),
+                    item.read_expression(),
+                    compare.expected.read_expression(),
+                    list.slot,
+                    list.slot
+                ),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "state.list_changed_result({}, scratch_list_changed);",
+                    list.slot
+                ),
+            );
+            return;
+        }
+        if let Some((index, item)) = variable_input_info(target, index_input, variables)
+            .zip(variable_input_info(target, item_input, variables))
+            .filter(|(index, item)| index.numeric && item.numeric)
+        {
+            line(
+                output,
+                indent,
+                &format!(
+                    "let scratch_list_numeric_pair = match ({}, {}) {{ (ScratchValue::Number(scratch_list_index), ScratchValue::Number(scratch_list_item)) => Some((*scratch_list_index, *scratch_list_item)), _ => None }};",
+                    index.read_expression(),
+                    item.read_expression()
+                ),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "let scratch_list_changed = if let Some((scratch_list_index, scratch_list_item)) = scratch_list_numeric_pair {{ state.list_mut({}).replace_number(scratch_list_index, scratch_list_item) }} else {{ let scratch_list_index: ScratchValue = ({}).clone(); let scratch_list_item: ScratchValue = ({}).clone(); state.list_mut({}).replace(scratch_list_index, scratch_list_item) }};",
+                    list.slot,
+                    index.read_expression(),
+                    item.read_expression(),
+                    list.slot
+                ),
+            );
+        } else {
+            let item = fused_random_expression(
+                owned_input(target, item_input, variables, lists, arguments),
+                local_random,
+            );
+            let index = fused_random_expression(
+                owned_input(target, index_input, variables, lists, arguments),
+                local_random,
+            );
+            line(
+                output,
+                indent,
+                &format!("let scratch_list_index: ScratchValue = {index};"),
+            );
+            line(
+                output,
+                indent,
+                &format!("let scratch_list_item: ScratchValue = {item};"),
+            );
+            line(
+                output,
+                indent,
+                &format!(
+                    "let scratch_list_changed = state.list_mut({}).replace(scratch_list_index, scratch_list_item);",
+                    list.slot
+                ),
+            );
+        }
+        line(
+            output,
+            indent,
+            &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generate_fused_if(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    local_random: bool,
+    compare: Option<&FusedReplacementCompare>,
+    output: &mut String,
+    indent: usize,
+) {
+    let condition = compare.map_or_else(
+        || {
+            fused_random_expression(
+                expression(
+                    target,
+                    block.inputs.get("CONDITION"),
+                    variables,
+                    lists,
+                    arguments,
+                    &mut HashSet::new(),
+                ),
+                local_random,
+            )
+        },
+        |compare| {
+            if compare.negated {
+                "!scratch_list_replace_matches".to_owned()
+            } else {
+                "scratch_list_replace_matches".to_owned()
+            }
+        },
+    );
+    line(output, indent, &format!("if scratch_bool({condition}) {{"));
+    let mut current = block
+        .inputs
+        .get("SUBSTACK")
+        .and_then(parse_input)
+        .and_then(|input| match input {
+            InputValue::BlockReference(id) => Some(id),
+            _ => None,
+        });
+    while let Some(id) = current {
+        let nested = &target.blocks[id];
+        match nested.opcode.as_str() {
+            "looks_say" | "looks_think" => {
+                let value = fused_random_expression(
+                    expression(
+                        target,
+                        nested.inputs.get("MESSAGE"),
+                        variables,
+                        lists,
+                        arguments,
+                        &mut HashSet::new(),
+                    ),
+                    local_random,
+                );
+                line(
+                    output,
+                    indent + 1,
+                    &format!("let scratch_bubble_text = scratch_string({value});"),
+                );
+                if nested.opcode == "looks_say" {
+                    let name = say_variable_name(target, nested.inputs.get("MESSAGE"))
+                        .unwrap_or_else(|| "say".to_owned());
+                    line(
+                        output,
+                        indent + 1,
+                        &format!(
+                            "print_value!(state, {}, scratch_bubble_text.clone());",
+                            quote(&name)
+                        ),
+                    );
+                }
+                line(
+                    output,
+                    indent + 1,
+                    &format!(
+                        "state.set_speech_bubble(BubbleKind::{}, scratch_bubble_text, None);",
+                        if nested.opcode == "looks_say" {
+                            "Say"
+                        } else {
+                            "Think"
+                        }
+                    ),
+                );
+            }
+            "control_stop" => match field_value(nested, "STOP_OPTION").and_then(Value::as_str) {
+                Some("all") => line(
+                    output,
+                    indent + 1,
+                    if local_random {
+                        "return Some(ScriptStatus::StopAll);"
+                    } else {
+                        "return ScriptStatus::StopAll;"
+                    },
+                ),
+                _ => unreachable!("fused branch validated the stop option"),
+            },
+            _ => unreachable!("fused branch validated the statement opcode"),
+        }
+        current = nested.next.as_deref();
+    }
+    line(output, indent, "}");
+}
+
+// bind Scratch random reporters to the loop's existing PRNG borrow when safe.
+fn fused_random_expression(expression: String, local_random: bool) -> String {
+    if local_random {
+        expression.replace(
+            "scratch_random_constant(",
+            "loop_random.between_with_integer_bounds(",
+        )
+    } else {
+        expression
+    }
 }
 
 struct NumericLoopPlan {
@@ -1812,10 +2807,7 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!(
-                        "state.list_changed_result({}, scratch_list_changed);",
-                        list.slot
-                    ),
+                    &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -1846,10 +2838,7 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!(
-                        "state.list_changed_result({}, scratch_list_changed);",
-                        list.slot
-                    ),
+                    &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -1868,10 +2857,7 @@ fn generate_resumable_statement(
                 line(
                     output,
                     indent,
-                    &format!(
-                        "state.list_changed_result({}, scratch_list_changed);",
-                        list.slot
-                    ),
+                    &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -1880,50 +2866,72 @@ fn generate_resumable_statement(
         "data_insertatlist" | "data_replaceitemoflist" => {
             if let Some(list) = list_field(block, "LIST", lists) {
                 let input = block.inputs.get("ITEM");
-                let item = owned_input(target, input, variables, lists, arguments);
-                let index = owned_input(
-                    target,
-                    block.inputs.get("INDEX"),
-                    variables,
-                    lists,
-                    arguments,
-                );
-                line(
-                    output,
-                    indent,
-                    &format!("let scratch_list_item: ScratchValue = {item};"),
-                );
-                line(
-                    output,
-                    indent,
-                    &format!("let scratch_list_index: ScratchValue = {index};"),
-                );
-                if block.opcode == "data_insertatlist" {
+                let index_input = block.inputs.get("INDEX");
+                let numeric_variables = (|| {
+                    let index = variable_input_info(target, index_input, variables)?;
+                    let item = variable_input_info(target, input, variables)?;
+                    (index.numeric && item.numeric).then_some((index, item))
+                })();
+                if block.opcode == "data_replaceitemoflist"
+                    && let Some((index, item)) = numeric_variables
+                {
                     line(
                         output,
                         indent,
                         &format!(
-                            "let scratch_list_changed = state.list_mut({}).insert(scratch_list_item, scratch_list_index);",
+                            "let scratch_list_numeric_pair = match ({}, {}) {{ (ScratchValue::Number(scratch_list_index), ScratchValue::Number(scratch_list_item)) => Some((*scratch_list_index, *scratch_list_item)), _ => None }};",
+                            index.read_expression(),
+                            item.read_expression()
+                        ),
+                    );
+                    line(
+                        output,
+                        indent,
+                        &format!(
+                            "let scratch_list_changed = if let Some((scratch_list_index, scratch_list_item)) = scratch_list_numeric_pair {{ state.list_mut({}).replace_number(scratch_list_index, scratch_list_item) }} else {{ let scratch_list_index: ScratchValue = ({}).clone(); let scratch_list_item: ScratchValue = ({}).clone(); state.list_mut({}).replace(scratch_list_index, scratch_list_item) }};",
+                            list.slot
+                            , index.read_expression(),
+                            item.read_expression(),
                             list.slot
                         ),
                     );
                 } else {
+                    let item = owned_input(target, input, variables, lists, arguments);
+                    let index = owned_input(target, index_input, variables, lists, arguments);
                     line(
                         output,
                         indent,
-                        &format!(
-                            "let scratch_list_changed = state.list_mut({}).replace(scratch_list_index, scratch_list_item);",
-                            list.slot
-                        ),
+                        &format!("let scratch_list_item: ScratchValue = {item};"),
                     );
+                    line(
+                        output,
+                        indent,
+                        &format!("let scratch_list_index: ScratchValue = {index};"),
+                    );
+                    if block.opcode == "data_insertatlist" {
+                        line(
+                            output,
+                            indent,
+                            &format!(
+                                "let scratch_list_changed = state.list_mut({}).insert(scratch_list_item, scratch_list_index);",
+                                list.slot
+                            ),
+                        );
+                    } else {
+                        line(
+                            output,
+                            indent,
+                            &format!(
+                                "let scratch_list_changed = state.list_mut({}).replace(scratch_list_index, scratch_list_item);",
+                                list.slot
+                            ),
+                        );
+                    }
                 }
                 line(
                     output,
                     indent,
-                    &format!(
-                        "state.list_changed_result({}, scratch_list_changed);",
-                        list.slot
-                    ),
+                    &format!("state.list_changed_result({}, scratch_list_changed);", list.slot),
                 );
             } else {
                 line(output, indent, "todo!(\"missing list reference\");");
@@ -1970,11 +2978,42 @@ fn generate_resumable_statement(
                     arguments,
                     &mut HashSet::new(),
                 );
-                if let Some(source) = variable_input(target, input, variables, lists, arguments) {
+                if variable.numeric {
+                    let setter = if variable.is_stage {
+                        "set_shared_number"
+                    } else {
+                        "set_local_number"
+                    };
+                    if let Some(source_variable) =
+                        variable_input_info(target, input, variables).filter(|source| source.numeric)
+                    {
+                        let source = source_variable.read_expression();
+                        line(
+                            output,
+                            indent,
+                            &format!(
+                                "if let ScratchValue::Number(scratch_numeric_value) = {source} {{ state.{setter}({}, *scratch_numeric_value); }} else {{ let scratch_new_value: ScratchValue = ({source}).clone(); {} }}",
+                                variable.slot,
+                                variable.write_statement("scratch_new_value")
+                            ),
+                        );
+                    } else {
+                        line(
+                            output,
+                            indent,
+                            &format!("state.{setter}({}, {value});", variable.slot),
+                        );
+                    }
+                } else if let Some(source) = variable_input(target, input, variables, lists, arguments) {
                     line(
                         output,
                         indent,
                         &format!("let scratch_new_value: ScratchValue = ({source}).clone();"),
+                    );
+                    line(
+                        output,
+                        indent,
+                        &variable.write_statement("scratch_new_value"),
                     );
                 } else {
                     line(
@@ -1982,12 +3021,12 @@ fn generate_resumable_statement(
                         indent,
                         &format!("let scratch_new_value: ScratchValue = ({value}).into();"),
                     );
+                    line(
+                        output,
+                        indent,
+                        &variable.write_statement("scratch_new_value"),
+                    );
                 }
-                line(
-                    output,
-                    indent,
-                    &variable.write_statement("scratch_new_value"),
-                );
             } else {
                 line(output, indent, "todo!(\"missing variable reference\");");
             }
@@ -2002,29 +3041,22 @@ fn generate_resumable_statement(
                     arguments,
                     &mut HashSet::new(),
                 );
-                if variable.is_stage {
-                    line(
-                        output,
-                        indent,
-                        &format!("let scratch_change = scratch_to_number({value});"),
-                    );
-                    line(
-                        output,
-                        indent,
-                        &format!("state.change_shared({}, scratch_change);", variable.slot),
-                    );
+                line(
+                    output,
+                    indent,
+                    &format!("let scratch_change = scratch_to_number({value});"),
+                );
+                // the runtime fast path falls back for dynamic values while keeping numeric monitor writes allocation-free.
+                let method = if variable.is_stage {
+                    "change_shared_number"
                 } else {
-                    line(
-                        output,
-                        indent,
-                        &format!("let scratch_change = scratch_to_number({value});"),
-                    );
-                    line(
-                        output,
-                        indent,
-                        &format!("state.change_local_by({}, scratch_change);", variable.slot),
-                    );
-                }
+                    "change_local_number"
+                };
+                line(
+                    output,
+                    indent,
+                    &format!("state.{method}({}, scratch_change);", variable.slot),
+                );
             } else {
                 line(output, indent, "todo!(\"missing variable reference\");");
             }
@@ -2671,6 +3703,23 @@ fn variable_input(
             } else {
                 None
             }
+        }
+        _ => None,
+    }
+}
+
+// return identity and static numeric proof for direct scalar variable inputs.
+fn variable_input_info(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, VariableInfo>,
+) -> Option<VariableInfo> {
+    match input.and_then(parse_input)? {
+        InputValue::VariableReference(reference) => variables.get(reference.id).cloned(),
+        InputValue::BlockReference(id) => {
+            let reporter = target.blocks.get(id)?;
+            (reporter.opcode == "data_variable")
+                .then(|| variable_field(reporter, "VARIABLE", variables))?
         }
         _ => None,
     }

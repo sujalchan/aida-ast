@@ -120,7 +120,8 @@ fn block_expression(
         "operator_divide" => binary("scratch_divide", "NUM1", "NUM2", active),
         "operator_mod" => binary("scratch_mod", "NUM1", "NUM2", active),
         "operator_equals" if identical_literal_inputs(block) => "true".to_owned(),
-        "operator_equals" => binary("scratch_equals", "OPERAND1", "OPERAND2", active),
+        "operator_equals" => numeric_list_equality(target, block, variables, lists)
+            .unwrap_or_else(|| binary("scratch_equals", "OPERAND1", "OPERAND2", active)),
         "operator_gt" => binary("scratch_greater_than", "OPERAND1", "OPERAND2", active),
         "operator_lt" => binary("scratch_less_than", "OPERAND1", "OPERAND2", active),
         "operator_and" => format!(
@@ -283,6 +284,56 @@ fn block_expression(
             .map(text_literal)
             .unwrap_or_else(|| unsupported_expression("missing text field")),
         opcode => unsupported_expression(&format!("unsupported reporter: {opcode}")),
+    }
+}
+
+// specialize direct numeric list comparisons while retaining dynamic fallbacks.
+fn numeric_list_equality(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+) -> Option<String> {
+    for (list_input, other_input) in [("OPERAND1", "OPERAND2"), ("OPERAND2", "OPERAND1")] {
+        let InputValue::BlockReference(id) = parse_input(block.inputs.get(list_input)?)? else {
+            continue;
+        };
+        let reporter = target.blocks.get(id)?;
+        if reporter.opcode != "data_itemoflist" {
+            continue;
+        }
+        let list = list_field(reporter, "LIST", lists)?;
+        let index = direct_variable_input(target, reporter.inputs.get("INDEX"), variables)?;
+        let other = direct_variable_input(target, block.inputs.get(other_input), variables)?;
+        if !index.numeric || !other.numeric {
+            continue;
+        }
+        let index_expression = index.read_expression();
+        let other_expression = other.read_expression();
+        return Some(format!(
+            "{{ let scratch_numeric_list_match = match ({index_expression}, {other_expression}) {{ (ScratchValue::Number(scratch_index), ScratchValue::Number(scratch_value)) => state.list({}).equals_number(*scratch_index, *scratch_value), _ => None }}; scratch_numeric_list_match.unwrap_or_else(|| scratch_equals(state.list({}).get({index_expression}), {other_expression})) }}",
+            list.slot, list.slot
+        ));
+    }
+    None
+}
+
+fn direct_variable_input(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+    variables: &HashMap<String, VariableInfo>,
+) -> Option<VariableInfo> {
+    match input.and_then(parse_input)? {
+        InputValue::VariableReference(reference) => variables.get(reference.id).cloned(),
+        InputValue::BlockReference(id) => {
+            let reporter = target.blocks.get(id)?;
+            if reporter.opcode == "data_variable" {
+                variable_field(reporter, "VARIABLE", variables)
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 

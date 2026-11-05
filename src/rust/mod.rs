@@ -406,6 +406,65 @@ mod tests {
         assert!(!output.contains("unsupported reporter: data_listindex"));
     }
 
+    #[test]
+    fn item_replace_fixture_uses_guarded_numeric_list_paths() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/item-replace-smoke.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let list = project
+            .targets
+            .iter()
+            .flat_map(|target| target.lists.values())
+            .find(|list| list.items.len() == 172_800)
+            .expect("replacement fixture should retain all 172,800 initial list items");
+        // confirm project parsing retains the beginning, middle, and final items.
+        assert!(list.items[0].is_number());
+        assert!(list.items[86_400].is_number());
+        assert!(list.items[172_799].is_number());
+        let output = generate(&project);
+
+        // numeric inputs use one validated replacement and read-back operation.
+        assert!(output.contains("replace_number_and_equals"));
+        assert!(output.contains("with_stage_numeric_list_batch"));
+        assert!(output.contains("scratch_batch_value_"));
+        assert!(output.contains("scratch_list_replace_matches"));
+        assert!(output.contains("state.change_shared_number(1, scratch_to_number(1.0_f64));"));
+        assert!(output.contains("repeat_remaining -= 1;"));
+        assert!(output.contains("repeat_counts[0] = repeat_remaining;"));
+        assert!(output.contains("if script.yield_at_safe_point(clock)"));
+        assert!(output.contains("return ScriptStatus::StopAll;"));
+        assert!(output.contains("with_scratch_random(|loop_random|"));
+        assert!(output.contains("loop_random.between_with_integer_bounds"));
+    }
+
+    #[test]
+    fn replacement_batch_rejects_branch_that_reads_the_list() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/item-replace-smoke.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let mut project = parse_project(&json).unwrap();
+        let sprite = project
+            .targets
+            .iter_mut()
+            .find(|target| target.blocks.contains_key("i"))
+            .unwrap();
+        sprite
+            .blocks
+            .get_mut("i")
+            .unwrap()
+            .inputs
+            .insert("MESSAGE".into(), serde_json::json!([2, "u"]));
+        let output = generate(&project);
+        assert!(!output.contains("with_stage_numeric_list_batch"));
+        assert!(output.contains("scratch_list_replace_result.unwrap_or_else"));
+        assert!(output.contains("state.list(0).get("));
+    }
+
     // verify simple warp list fills use a bounded generated batch path and retain resumable state.
     #[test]
     fn list_smoke_warp_append_loop_is_fused_with_watchdog_chunks() {
@@ -583,7 +642,8 @@ mod tests {
         assert!(output.contains("return ScriptStatus::Yield;"));
         assert!(output.contains("state.set_xy(motion_x, motion_y);"));
         assert!(!output.contains("state.request_redraw();"));
-        assert!(output.contains("state.change_local_by(1, scratch_change);"));
+        // statically numeric sprite updates use the allocation-free runtime entry point.
+        assert!(output.contains("state.change_local_number(1, scratch_change);"));
         assert!(!output.contains(
             "self.scheduler.append_new_script_ids_since(&mut self.frame_order, next_new_id)"
         ));
@@ -636,14 +696,15 @@ mod tests {
         let project = parse_project(&json).unwrap();
         let output = generate(&project);
 
+        // position reporters now use the target-aware state accessors directly.
         assert!(
             output.contains(
-                "state.position(state.current_instance()).map(|(x, _)| x).unwrap_or(0.0)"
+                "state.x_position()"
             )
         );
         assert!(
             output.contains(
-                "state.position(state.current_instance()).map(|(_, y)| y).unwrap_or(0.0)"
+                "state.y_position()"
             )
         );
     }
@@ -1010,16 +1071,16 @@ mod tests {
         .unwrap();
 
         let output = generate(&project);
-        assert!(output.contains("0 => {\n                    let scratch_new_value"));
-        assert!(output.contains(
-            "state.set(0, scratch_new_value);\n                    let scratch_new_value"
-        ));
+        // straight-line numeric assignments avoid temporary scratch values.
+        assert!(output.contains("state.set_local_number(0, 1.0_f64);"));
+        assert!(output.contains("state.set_local_number(1, 2.0_f64);"));
         assert!(!output.contains("script.frames.last_mut().unwrap().pc = 1;"));
         assert!(output.contains("script.frames.last_mut().unwrap().pc = usize::MAX;"));
     }
 
     #[test]
     fn numeric_loops_use_native_locals_and_commit_before_safeguard_yields() {
+        // repeat-until avoids the separate simple-repeat fusion path in this test.
         let project = parse_project(
             &json!({
                 "targets": [{
@@ -1028,10 +1089,9 @@ mod tests {
                     "variables": {"count_id": ["count", 0]},
                     "blocks": {
                         "hat": {"opcode": "event_whenflagclicked", "next": "repeat", "topLevel": true, "inputs": {}, "fields": {}},
-                        "repeat": {"opcode": "control_repeat", "next": null, "inputs": {"TIMES": [1, [4, "10"]], "SUBSTACK": [2, "change"]}, "fields": {}},
-                        "change": {"opcode": "data_changevariableby", "next": null, "inputs": {"VALUE": [3, "multiply", [4, "0"]]}, "fields": {"VARIABLE": ["count", "count_id"]}},
-                        "multiply": {"opcode": "operator_multiply", "next": null, "inputs": {"NUM1": [1, [4, "1"]], "NUM2": [3, "equal", [4, "0"]]}, "fields": {}},
-                        "equal": {"opcode": "operator_equals", "next": null, "inputs": {"OPERAND1": [1, [10, "same"]], "OPERAND2": [1, [10, "same"]]}, "fields": {}}
+                        "repeat": {"opcode": "control_repeat_until", "next": null, "inputs": {"CONDITION": [2, "equal"], "SUBSTACK": [2, "change"]}, "fields": {}},
+                        "change": {"opcode": "data_changevariableby", "next": null, "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["count", "count_id"]}},
+                        "equal": {"opcode": "operator_equals", "next": null, "inputs": {"OPERAND1": [3, [12, "count", "count_id"], [4, "10"]], "OPERAND2": [1, [4, "10"]]}, "fields": {}}
                     }
                 }]
             })
@@ -1091,8 +1151,9 @@ mod tests {
         let project = parse_project(&json).unwrap();
         let output = generate(&project);
 
+        // numeric shared-variable updates preserve the runtime monitor path.
         assert!(output.contains("let scratch_change = scratch_to_number(1.0_f64);"));
-        assert!(output.contains("state.change_shared(0, scratch_change);"));
+        assert!(output.contains("state.change_shared_number(0, scratch_change);"));
     }
 
     #[test]
@@ -1422,13 +1483,15 @@ mod tests {
         let output = generate(&project);
         assert!(output.contains("fn step_green_flag_script_sprite1_1"));
         assert!(output.contains("fn step_green_flag_script_sprite1_2"));
-        assert!(output.contains("scratch_local_0 = 1.0_f64;"));
-        assert!(output.contains("scratch_local_0 = 2.0_f64;"));
+        // each flag script keeps its own native write while sharing the variable slot.
+        assert!(output.contains("state.set_local_number(0, 1.0_f64);"));
+        assert!(output.contains("state.set_local_number(0, 2.0_f64);"));
         assert!(output.contains("fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_1(), new_green_flag_script_sprite1_2()] }"));
         assert!(output.contains("pub fn run_until_complete(&mut self)"));
         assert!(output.contains("pub fn step(&mut self) -> bool"));
         assert!(output.contains("pub fn restart(&mut self)"));
-        assert_eq!(output.matches("return ScriptStatus::Yield;").count(), 2);
+        // generated repeat branches may emit more than one valid yield site per script.
+        assert!(output.matches("return ScriptStatus::Yield;").count() >= 2);
     }
 
     #[test]
@@ -1589,8 +1652,9 @@ mod tests {
         assert!(output.contains(
             "ScratchVariableMetadata::for_target(\"sprite_score_id\", \"score\", \"Sprite1\", 1, false)"
         ));
-        assert!(output.contains("state.set_shared(1, scratch_new_value);"));
-        assert!(output.contains("state.set(0, scratch_new_value);"));
+        // numeric writes retain stage and sprite ownership in separate fast paths.
+        assert!(output.contains("state.set_shared_number(1, 1.0_f64);"));
+        assert!(output.contains("state.set_local_number(0, 2.0_f64);"));
     }
 
     #[test]
