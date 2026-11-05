@@ -1647,7 +1647,11 @@ fn generate_resumable_statement(
             line(
                 output,
                 indent,
-                "state.set_pen_rgb_color(scratch_pen_color);",
+                if target_has_pen_hsv_controls(target) {
+                    "state.set_pen_rgb_color(scratch_pen_color);"
+                } else {
+                    "state.set_pen_rgb_color_without_hsv(scratch_pen_color);"
+                },
             );
         }
         "pen_changePenColorParamBy" | "pen_setPenColorParamTo" => {
@@ -2707,6 +2711,21 @@ fn pen_color_parameter_input(
         &mut HashSet::new(),
     );
     format!("scratch_string({value})")
+}
+
+// preserve hsv state whenever any block on this target can read or change it.
+fn target_has_pen_hsv_controls(target: &ScratchTarget) -> bool {
+    target.blocks.values().any(|block| {
+        matches!(
+            block.opcode.as_str(),
+            "pen_changePenColorParamBy"
+                | "pen_setPenColorParamTo"
+                | "pen_changePenHueBy"
+                | "pen_setPenHueToNumber"
+                | "pen_changePenShadeBy"
+                | "pen_setPenShadeToNumber"
+        )
+    })
 }
 
 fn list_field(

@@ -127,6 +127,42 @@ mod tests {
         }
     }
 
+    // specialize rgb assignment only when that target cannot use hsv controls.
+    #[test]
+    fn pen_rgb_generation_skips_unused_hsv_state_per_target() {
+        let make_project = |include_hsv_control: bool| {
+            let mut blocks = json!({
+                "hat": { "opcode": "event_whenflagclicked", "next": "set_color", "topLevel": true },
+                "set_color": { "opcode": "pen_setPenColorToColor", "next": null, "parent": "hat", "inputs": { "COLOR": [1, [10, "16711680"]] } }
+            });
+            if include_hsv_control {
+                blocks["set_color"]["next"] = json!("set_saturation");
+                blocks["set_saturation"] = json!({
+                    "opcode": "pen_setPenColorParamTo",
+                    "next": null,
+                    "parent": "set_color",
+                    "fields": { "COLOR_PARAM": ["saturation", null] },
+                    "inputs": { "VALUE": [1, [4, "50"]] }
+                });
+            }
+            json!({
+                "targets": [
+                    { "name": "Stage", "isStage": true, "variables": {}, "lists": {}, "blocks": {} },
+                    { "name": "Sprite1", "isStage": false, "variables": {}, "lists": {}, "blocks": blocks }
+                ]
+            })
+        };
+
+        let direct_project = parse_project(&make_project(false).to_string()).unwrap();
+        let direct_output = generate(&direct_project);
+        assert!(direct_output.contains("state.set_pen_rgb_color_without_hsv(scratch_pen_color);"));
+
+        let hsv_project = parse_project(&make_project(true).to_string()).unwrap();
+        let hsv_output = generate(&hsv_project);
+        assert!(hsv_output.contains("state.set_pen_rgb_color(scratch_pen_color);"));
+        assert!(hsv_output.contains("state.set_pen_color_parameter("));
+    }
+
     #[test]
     fn pen_smoke_loop_uses_enum_menu_values_in_its_hot_path() {
         let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/pen-smoke-test.sb3");
@@ -258,12 +294,19 @@ mod tests {
             );
         }
         assert!(output.contains("sensing_online"));
-        assert!(output.contains("value: (false).into()"));
+        assert!(output.contains("value: ScratchValue = (false).into()"));
+        // assert the generated reporter key and local binding separately to avoid formatting coupling.
         assert!(output.contains(
-            "ReporterSnapshot { key: \"__reporter/Stage/sensing_current/current_year\".to_owned(), value: (self.state.current_year()).into() }"
+            "__reporter/Stage/sensing_current/current_year\".to_owned()"
         ));
         assert!(output.contains(
-            "ReporterSnapshot { key: \"__reporter/Stage/sensing_username/sensing_username\".to_owned(), value: (self.state.username()).into() }"
+            "value: ScratchValue = (self.state.current_year()).into()"
+        ));
+        assert!(output.contains(
+            "__reporter/Stage/sensing_username/sensing_username\".to_owned()"
+        ));
+        assert!(output.contains(
+            "value: ScratchValue = (self.state.username()).into()"
         ));
         assert!(output.contains("ReporterSnapshot"));
         assert!(output.contains("pub fn has_live_sensing_monitors(&self) -> bool { true }"));
