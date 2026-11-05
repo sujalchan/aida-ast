@@ -382,6 +382,15 @@ fn generate_internal(
                 target.direction, target.size, target.visible
             ),
         );
+        // seed the runtime drawable with the serialized scratch rotation style.
+        line(
+            &mut output,
+            1,
+            &format!(
+                "state.set_original_rotation_style({target_index}, {});",
+                quote(&target.rotation_style)
+            ),
+        );
         let costume_names = target
             .costumes
             .iter()

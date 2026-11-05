@@ -127,6 +127,35 @@ mod tests {
         }
     }
 
+    // lower the fixture's motion blocks to the shared runtime state methods.
+    #[test]
+    fn rotation_direction_fixture_generates_motion_and_rotation_style_paths() {
+        let input = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/src/motion-rotation-direction.sb3"
+        );
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let output = generate(&project);
+
+        for generated in [
+            "state.move_steps(scratch_to_number(",
+            "state.set_rotation_style(\"left-right\");",
+            "state.set_rotation_style(\"don't rotate\");",
+            "state.set_rotation_style(\"all around\");",
+            "state.bounce_on_edge();",
+            "state.x_position()",
+            "state.y_position()",
+        ] {
+            assert!(
+                output.contains(generated),
+                "missing generated motion path: {generated}"
+            );
+        }
+        assert!(!output.contains("unsupported statement: motion_"));
+        assert!(!output.contains("unsupported reporter: motion_"));
+    }
+
     // specialize rgb assignment only when that target cannot use hsv controls.
     #[test]
     fn pen_rgb_generation_skips_unused_hsv_state_per_target() {

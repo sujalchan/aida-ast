@@ -10,11 +10,11 @@ The opcode audit used Scratch Blocks `develop` at [`95817145`](https://github.co
 
 | Fully implemented | Partially implemented | Not implemented |
 |---:|---:|---:|
-| **113** | **1** | **20** |
+| **116** | **1** | **17** |
 
 These totals count only the current Scratch runtime opcode section below. Editor and serialized-input helpers, legacy compatibility opcodes, and AIDA extension examples are excluded.
 
-**Generated counts:** current runtime: 134 (113 `✓`, 1 `-`, 20 `x`); editor and serialized helpers: 30; legacy no-ops: 9; legacy executable: 12; AIDA extension examples: 10; total classified identifiers: 195.
+**Generated counts:** current runtime: 134 (116 `✓`, 1 `-`, 17 `x`); editor and serialized helpers: 30; legacy no-ops: 9; legacy executable: 12; AIDA extension examples: 10; total classified identifiers: 195.
 
 The counts are checked against the section classification, the unique opcodes in [`src/aida/block_cases.tsv`](src/aida/block_cases.tsv), and the four separately handled custom-procedure opcodes by `scratch_block_support_inventory_is_complete_and_counts_match`.
 
@@ -114,7 +114,7 @@ These are Scratch VM blocks that represent runtime behavior, including hats, rep
 
 | Scratch opcode | AIDA text output | AIDA Rust runtime |
 |---|:---:|:---:|
-| `motion_movesteps` | ✓ | x |
+| `motion_movesteps` | ✓ | ✓ |
 | `motion_turnright` | ✓ | ✓ |
 | `motion_turnleft` | ✓ | ✓ |
 | `motion_pointindirection` | ✓ | ✓ |
@@ -127,8 +127,8 @@ These are Scratch VM blocks that represent runtime behavior, including hats, rep
 | `motion_setx` | ✓ | ✓ |
 | `motion_changeyby` | ✓ | ✓ |
 | `motion_sety` | ✓ | ✓ |
-| `motion_ifonedgebounce` | ✓ | x |
-| `motion_setrotationstyle` | ✓ | x |
+| `motion_ifonedgebounce` | ✓ | ✓ |
+| `motion_setrotationstyle` | ✓ | ✓ |
 | `motion_xposition` | ✓ | ✓ |
 | `motion_yposition` | ✓ | ✓ |
 | `motion_direction` | ✓ | ✓ |

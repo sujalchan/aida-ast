@@ -69,6 +69,9 @@ pub struct ScratchTarget {
     pub size: f64,
     #[serde(default = "default_visible")]
     pub visible: bool,
+    // preserve each target's startup rotation style for renderer initialization.
+    #[serde(default = "default_rotation_style", rename = "rotationStyle")]
+    pub rotation_style: String,
     #[serde(default = "default_volume")]
     pub volume: f64,
     // retain target drag metadata for Scratch-compatible pointer event timing.
@@ -103,6 +106,9 @@ fn default_size() -> f64 {
 }
 fn default_visible() -> bool {
     true
+}
+fn default_rotation_style() -> String {
+    "all around".to_owned()
 }
 fn default_volume() -> f64 {
     100.0

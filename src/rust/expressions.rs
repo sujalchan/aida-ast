@@ -168,12 +168,8 @@ fn block_expression(
             .map(text_literal)
             .unwrap_or_else(|| unsupported_expression("missing backdrop menu value")),
         // read each motion reporter from the instance selected by the scheduler.
-        "motion_xposition" => {
-            "state.position(state.current_instance()).map(|(x, _)| x).unwrap_or(0.0)".to_owned()
-        }
-        "motion_yposition" => {
-            "state.position(state.current_instance()).map(|(_, y)| y).unwrap_or(0.0)".to_owned()
-        }
+        "motion_xposition" => "state.x_position()".to_owned(),
+        "motion_yposition" => "state.y_position()".to_owned(),
         // report the direction stored for the currently scheduled sprite or clone.
         "motion_direction" => "state.direction()".to_owned(),
         "looks_costume" => field_value(block, "COSTUME")

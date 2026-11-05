@@ -2147,6 +2147,35 @@ fn generate_resumable_statement(
                 "return ScriptStatus::WaitUntil(wait_deadline);",
             );
         }
+        // lower motion through instance-owned state so fencing and rendering stay centralized.
+        "motion_movesteps" => {
+            let steps = expression(
+                target,
+                block.inputs.get("STEPS"),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            line(
+                output,
+                indent,
+                &format!("state.move_steps(scratch_to_number({steps}));"),
+            );
+        }
+        "motion_setrotationstyle" => {
+            let style = field_value(block, "STYLE")
+                .and_then(Value::as_str)
+                .unwrap_or("all around");
+            line(
+                output,
+                indent,
+                &format!("state.set_rotation_style({});", quote(style)),
+            );
+        }
+        "motion_ifonedgebounce" => {
+            line(output, indent, "state.bounce_on_edge();");
+        }
         "motion_gotoxy" => {
             let x = expression(
                 target,
