@@ -1,5 +1,7 @@
 # Scratch fixture tests
 
+SOME TESTS LOOP FOREVER FOR THIS CASE USE --max-tick 1000, --test or only evaluate for 10 seconds
+
 The `.sb3` projects in `tests/src` are end-to-end checks for Rust generation
 and runtime behavior. The files in `tests/expected` are the behavioral
 reference logs. Read the matching expected log before changing lowering,
@@ -49,6 +51,21 @@ at 30 FPS, 40 FPS, and turbo, keeping the runs bounded:
 
 On Windows, `run.bat` accepts the same project and runtime options. It also
 uses release builds and bounds all-projects runs to 1,000 ticks per fixture.
+
+## Sensing-of fixtures
+
+| Project | Coverage |
+|---|---|
+| `src/sensing-of.sb3` | The seven supplied Stage and sprite property checks, including a sprite with no scripts. |
+| `src/sensing-of-mutations.sb3` | Live sprite position, direction, costume, size, and volume plus changing Stage backdrop and volume. |
+
+## Costume-size fixture
+
+| Project | Coverage |
+|---|---|
+| `src/costume-size.sb3` | Scratch costume-dependent size limits, fractional size changes, costume switching, and costume number/name reporters. |
+
+The matching expected log contains eight `say: "true"` lines in script order.
 
 ## Compare expected logs
 

@@ -41,6 +41,85 @@ fn pen_fixture_generates_pen_commands_and_costume_state_without_todos() {
     }
 }
 
+#[test]
+fn size_blocks_lower_to_live_runtime_size_updates() {
+    let project = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Sprite1", "isStage": false,
+                "blocks": {
+                    "hat": {"opcode": "event_whenflagclicked", "next": "set", "topLevel": true},
+                    "set": {"opcode": "looks_setsizeto", "next": "next", "inputs": {"SIZE": [1, [4, "140"]]}},
+                    "next": {"opcode": "looks_nextcostume", "next": "change"},
+                    "change": {"opcode": "looks_changesizeby", "inputs": {"CHANGE": [1, [4, "-10"]]}}
+                }
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = generate(&project);
+
+    assert!(output.contains(
+        "let scratch_size_input = scratch_to_number(140.0_f64); state.set_size(scratch_size_input);"
+    ));
+    assert!(output.contains("state.next_costume();"));
+    assert!(output.contains("let scratch_size_input = scratch_to_number(-10.0_f64); state.change_size_by(scratch_size_input);"));
+    assert!(!output.contains("unsupported statement: looks_setsize"));
+}
+
+#[test]
+fn size_inputs_are_evaluated_before_mutating_runtime_state() {
+    let project = parse_project(
+        &json!({
+            "targets": [
+                {"name": "Stage", "isStage": true, "variables": {"size_id": ["size", 100]}, "blocks": {}},
+                {
+                    "name": "Sprite1", "isStage": false,
+                    "blocks": {
+                    "hat": {"opcode": "event_whenflagclicked", "next": "set", "topLevel": true},
+                    "set": {"opcode": "looks_setsizeto", "next": "change", "inputs": {"SIZE": [3, "set_value"]}},
+                    "set_value": {"opcode": "data_variable", "parent": "set", "fields": {"VARIABLE": ["size", "size_id"]}},
+                    "change": {"opcode": "looks_changesizeby", "inputs": {"CHANGE": [3, "change_value"]}},
+                    "change_value": {"opcode": "data_variable", "parent": "change", "fields": {"VARIABLE": ["size", "size_id"]}}
+                    }
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = generate(&project);
+
+    assert!(output.contains("let scratch_size_input = scratch_to_number(state.get_shared("));
+    assert!(output.contains("state.set_size(scratch_size_input);"));
+    assert!(output.contains("state.change_size_by(scratch_size_input);"));
+    assert!(!output.contains("state.set_size(state.get_shared("));
+    assert!(!output.contains("state.change_size_by(state.get_shared("));
+}
+
+#[test]
+fn looks_size_reporter_reads_the_live_target_size() {
+    let project = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Sprite1", "isStage": false,
+                "blocks": {
+                    "hat": {"opcode": "event_whenflagclicked", "next": "say", "topLevel": true},
+                    "say": {"opcode": "looks_say", "inputs": {"MESSAGE": [2, "size"]}},
+                    "size": {"opcode": "looks_size", "parent": "say", "inputs": {}, "fields": {}}
+                }
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = generate(&project);
+
+    assert!(output.contains("state.size_reporter()"));
+    assert!(!output.contains("unsupported reporter: looks_size"));
+}
+
 // lower the fixture's motion blocks to the shared runtime state methods.
 
 #[test]

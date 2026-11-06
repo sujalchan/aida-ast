@@ -65,10 +65,7 @@ pub(super) fn procedure_signatures(target: &ScratchTarget) -> Vec<ProcedureSigna
 fn stable_frame_id(definition_id: &str, used: &mut HashSet<usize>) -> usize {
     for salt in 0_u32.. {
         let mut hash = 0x811c_9dc5_u32;
-        for byte in definition_id
-            .bytes()
-            .chain(salt.to_le_bytes().into_iter())
-        {
+        for byte in definition_id.bytes().chain(salt.to_le_bytes().into_iter()) {
             hash ^= u32::from(byte);
             hash = hash.wrapping_mul(0x0100_0193);
         }

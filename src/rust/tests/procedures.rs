@@ -185,7 +185,9 @@ fn emits_and_invokes_each_green_flag_script_separately() {
     // each flag script keeps its own native write while sharing the variable slot.
     assert!(output.contains("state.set_local_number(0, 1.0_f64);"));
     assert!(output.contains("state.set_local_number(0, 2.0_f64);"));
-    assert!(output.contains("fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_"));
+    assert!(output.contains(
+        "fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_"
+    ));
     assert!(output.contains("pub fn run_until_complete(&mut self)"));
     assert!(output.contains("pub fn step(&mut self) -> bool"));
     assert!(output.contains("pub fn restart(&mut self)"));
@@ -214,7 +216,10 @@ fn identical_event_scripts_reuse_one_statically_dispatched_step_body() {
     .unwrap();
 
     let output = generate(&project);
-    assert_eq!(output.matches("fn step_green_flag_script_sprite1_").count(), 1);
+    assert_eq!(
+        output.matches("fn step_green_flag_script_sprite1_").count(),
+        1
+    );
     assert!(output.contains("use self::step_green_flag_script_sprite1_"));
     assert!(output.contains(" as step_green_flag_script_sprite1_"));
 }
@@ -299,9 +304,7 @@ fn resumable_procedure_body_is_emitted_once_for_multiple_scripts() {
     assert!(output.contains("use self::step_green_flag_script_sprite1_"));
     assert!(output.contains(" as step_green_flag_script_sprite1_"));
 
-    let step_start = output
-        .find("fn step_green_flag_script_sprite1_")
-        .unwrap();
+    let step_start = output.find("fn step_green_flag_script_sprite1_").unwrap();
     let step_end = output[step_start..].find("\n}\n").unwrap() + step_start;
     let first_script = &output[step_start..step_end];
     assert!(!first_script.contains("ScriptStatus::WaitUntil"));

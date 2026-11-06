@@ -397,17 +397,23 @@ fn generate_internal(
                 quote(&target.rotation_style)
             ),
         );
-        let costume_names = target
+        let costume_metadata = target
             .costumes
             .iter()
-            .map(|costume| format!("{}.to_owned()", quote(&costume.name)))
+            .map(|costume| {
+                let size = costume.logical_size.map_or_else(
+                    || "None".to_owned(),
+                    |[width, height]| format!("Some([{width:?}_f64, {height:?}_f64])"),
+                );
+                format!("({}.to_owned(), {size})", quote(&costume.name))
+            })
             .collect::<Vec<_>>()
             .join(", ");
         line(
             &mut output,
             1,
             &format!(
-                "state.set_target_costumes({target_index}, vec![{costume_names}], {});",
+                "state.set_target_costumes_with_sizes({target_index}, vec![{costume_metadata}], {});",
                 target.current_costume
             ),
         );
@@ -591,7 +597,9 @@ fn generate_internal(
         (false, true) => {
             "macro_rules! __aida_continue_at { ($script:expr, $pc:expr) => {{ ($script).frame_mut().pc = $pc; continue; }}; }\n\n"
         }
-        (true, true) => "macro_rules! __aida_set_pc { ($script:expr, $pc:expr) => { ($script).frame_mut().pc = $pc; }; }\nmacro_rules! __aida_continue_at { ($script:expr, $pc:expr) => {{ ($script).frame_mut().pc = $pc; continue; }}; }\n\n",
+        (true, true) => {
+            "macro_rules! __aida_set_pc { ($script:expr, $pc:expr) => { ($script).frame_mut().pc = $pc; }; }\nmacro_rules! __aida_continue_at { ($script:expr, $pc:expr) => {{ ($script).frame_mut().pc = $pc; continue; }}; }\n\n"
+        }
     };
     let frame_accessors = if uses_frame_accessors {
         "\nimpl ScriptState {\n    #[inline(always)]\n    fn frame(&self) -> &ProcedureFrame { self.frames.last().unwrap() }\n    #[inline(always)]\n    fn frame_mut(&mut self) -> &mut ProcedureFrame { self.frames.last_mut().unwrap() }\n}\n"
@@ -614,8 +622,8 @@ fn compact_resumable_state_source(source: &str) -> (String, bool, bool, bool) {
     let mut output = String::with_capacity(source.len());
     let mut uses_pc_setter = false;
     let mut uses_pc_transition = false;
-    let mut uses_frame_accessors = source.contains("script.frame()")
-        || source.contains("script.frame_mut()");
+    let mut uses_frame_accessors =
+        source.contains("script.frame()") || source.contains("script.frame_mut()");
     let lines = source.split_inclusive('\n').collect::<Vec<_>>();
     let mut index = 0;
     while index < lines.len() {

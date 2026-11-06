@@ -43,8 +43,7 @@ pub fn load_sb3(
     fs::create_dir_all(&assets_dir)?;
     let file = fs::File::open(path)?;
     let mut archive = ZipArchive::new(file)?;
-    let mut json = String::new();
-    archive.by_name("project.json")?.read_to_string(&mut json)?;
+    let json = extractor::read_project_json(path)?;
     let project = parse_project(&json)?;
     for target in &project.targets {
         for asset in target.costumes.iter().chain(&target.sounds) {
@@ -90,6 +89,7 @@ mod load_tests {
         let loaded = load_sb3(&project, &assets).unwrap();
         let apple = &loaded.project.targets[2].costumes[0];
         assert!(apple.md5ext.is_empty());
+        assert!(apple.logical_size.is_some());
         assert!(
             loaded
                 .assets_dir

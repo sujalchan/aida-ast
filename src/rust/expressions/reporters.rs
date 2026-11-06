@@ -111,16 +111,8 @@ pub(super) fn block_expression(
         block.opcode.as_str(),
         "operator_add" | "operator_subtract" | "operator_multiply" | "operator_divide"
     ) {
-        let left = constant_numeric_input(
-            target,
-            block.inputs.get("NUM1"),
-            &mut HashSet::new(),
-        );
-        let right = constant_numeric_input(
-            target,
-            block.inputs.get("NUM2"),
-            &mut HashSet::new(),
-        );
+        let left = constant_numeric_input(target, block.inputs.get("NUM1"), &mut HashSet::new());
+        let right = constant_numeric_input(target, block.inputs.get("NUM2"), &mut HashSet::new());
         if let (Some(left), Some(right)) = (left, right) {
             let folded = match block.opcode.as_str() {
                 "operator_add" => left + right,
@@ -253,6 +245,11 @@ pub(super) fn block_expression(
         "data_variable" => variable_field(block, "VARIABLE", variables)
             .map(|variable| variable.read_expression())
             .unwrap_or_else(|| unsupported_expression("missing variable reference")),
+        "sensing_of" => sensing_of_expression(target, block, variables, lists, arguments, active),
+        "sensing_of_object_menu" => field_value(block, "OBJECT")
+            .and_then(Value::as_str)
+            .map(quote)
+            .unwrap_or_else(|| "ScratchValue::Undefined".to_owned()),
         "sound_volume" => "state.sound_volume()".to_owned(),
         "sound_sounds_menu" => field_value(block, "SOUND_MENU")
             .map(text_literal)
@@ -280,6 +277,7 @@ pub(super) fn block_expression(
                 .is_some_and(|value| value == "number");
             format!("state.costume_number_name({number})")
         }
+        "looks_size" => "state.size_reporter()".to_owned(),
         "looks_backdropnumbername" => {
             let number = field_value(block, "NUMBER_NAME")
                 .and_then(Value::as_str)
@@ -380,6 +378,123 @@ pub(super) fn block_expression(
             .unwrap_or_else(|| unsupported_expression("missing text field")),
         opcode => unsupported_expression(&format!("unsupported reporter: {opcode}")),
     }
+}
+
+fn sensing_of_expression(
+    target: &ScratchTarget,
+    block: &ScratchBlock,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    arguments: &HashMap<String, String>,
+    active: &mut HashSet<String>,
+) -> String {
+    let Some(property) = field_value(block, "PROPERTY").and_then(Value::as_str) else {
+        return "ScratchValue::Number(0.0_f64)".to_owned();
+    };
+    let Some(object_input) = block.inputs.get("OBJECT") else {
+        return "ScratchValue::Number(0.0_f64)".to_owned();
+    };
+
+    match parse_input(object_input) {
+        Some(InputValue::Empty) | None => {
+            return "ScratchValue::Number(0.0_f64)".to_owned();
+        }
+        Some(InputValue::BlockReference(id)) => {
+            let Some(input_block) = target.blocks.get(id) else {
+                return "ScratchValue::Number(0.0_f64)".to_owned();
+            };
+            if active.contains(id) {
+                return "ScratchValue::Number(0.0_f64)".to_owned();
+            }
+            if input_block.opcode == "sensing_of_object_menu"
+                && field_value(input_block, "OBJECT")
+                    .and_then(Value::as_str)
+                    .is_none()
+            {
+                return "ScratchValue::Number(0.0_f64)".to_owned();
+            }
+        }
+        Some(InputValue::VariableReference(reference)) if !variables.contains_key(reference.id) => {
+            return "ScratchValue::Number(0.0_f64)".to_owned();
+        }
+        Some(InputValue::ListReference(reference)) if !lists.contains_key(reference.id) => {
+            return "ScratchValue::Number(0.0_f64)".to_owned();
+        }
+        _ => {}
+    }
+
+    let static_name = match parse_input(object_input) {
+        Some(InputValue::String(value)) => value.as_str(),
+        Some(InputValue::BlockReference(id)) => target
+            .blocks
+            .get(id)
+            .filter(|menu| menu.opcode == "sensing_of_object_menu")
+            .and_then(|menu| field_value(menu, "OBJECT"))
+            .and_then(Value::as_str),
+        _ => None,
+    };
+
+    if let Some(name) = static_name
+        && !target.target_identities.is_empty()
+    {
+        let identity = if name == "_stage_" {
+            target
+                .target_identities
+                .iter()
+                .find(|(_, _, is_stage)| *is_stage)
+        } else {
+            target
+                .target_identities
+                .iter()
+                .find(|(target_name, _, is_stage)| !is_stage && target_name == name)
+        };
+        let Some((_, target_index, is_stage)) = identity else {
+            return "ScratchValue::Number(0.0_f64)".to_owned();
+        };
+        let variable_slot = variables
+            .values()
+            .filter(|variable| {
+                variable.target_index == *target_index
+                    && variable.is_stage == *is_stage
+                    && variable.name == property
+            })
+            .min_by_key(|variable| variable.slot)
+            .map(|variable| variable.slot);
+        let is_builtin = if *is_stage {
+            matches!(
+                property,
+                "backdrop #" | "background #" | "backdrop name" | "volume"
+            )
+        } else {
+            matches!(
+                property,
+                "x position"
+                    | "y position"
+                    | "direction"
+                    | "costume #"
+                    | "costume name"
+                    | "size"
+                    | "volume"
+            )
+        };
+        if !is_builtin && variable_slot.is_none() {
+            return "ScratchValue::Number(0.0_f64)".to_owned();
+        }
+        return format!(
+            "state.sensing_of_target_slot({target_index}, {property:?}, {})",
+            variable_slot.map_or_else(|| "None".to_owned(), |slot| format!("Some({slot})"))
+        );
+    }
+
+    let object = expression(
+        target,
+        Some(object_input),
+        variables,
+        lists,
+        arguments,
+        active,
+    );
+    format!("state.sensing_of_by_name({object}, {property:?})")
 }
 
 pub(super) fn comparison_input_is_value_ref(

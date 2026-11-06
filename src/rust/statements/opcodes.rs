@@ -37,6 +37,34 @@ pub(super) fn generate_resumable_statement(
                 &format!("state.switch_costume_to({costume});"),
             );
         }
+        "looks_nextcostume" => line(output, indent, "state.next_costume();"),
+        "looks_changesizeby" | "looks_setsizeto" => {
+            let input_name = if block.opcode == "looks_changesizeby" {
+                "CHANGE"
+            } else {
+                "SIZE"
+            };
+            let size = expression(
+                target,
+                block.inputs.get(input_name),
+                variables,
+                lists,
+                arguments,
+                &mut HashSet::new(),
+            );
+            let method = if block.opcode == "looks_changesizeby" {
+                "change_size_by"
+            } else {
+                "set_size"
+            };
+            line(
+                output,
+                indent,
+                &format!(
+                    "let scratch_size_input = scratch_to_number({size}); state.{method}(scratch_size_input);"
+                ),
+            );
+        }
         "pen_clear" => line(output, indent, "state.clear_pen();"),
         "sound_play" => {
             let selector = owned_input(

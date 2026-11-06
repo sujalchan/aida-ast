@@ -15,6 +15,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
 pub struct ScratchProject {
@@ -96,6 +97,11 @@ pub struct ScratchTarget {
 
     #[serde(default)]
     pub broadcasts: HashMap<String, String>,
+
+    // Shared compile-time project identities let reporters resolve static target
+    // menus without adding target-name searches to their runtime hot path.
+    #[serde(skip)]
+    pub target_identities: Arc<Vec<(String, usize, bool)>>,
 }
 
 fn default_direction() -> f64 {
@@ -125,6 +131,10 @@ pub struct ScratchAsset {
     pub md5ext: String,
     #[serde(default, rename = "bitmapResolution")]
     pub bitmap_resolution: Option<f64>,
+    // Resolved from the asset bytes when loading an .sb3. These are Scratch
+    // skin dimensions, rather than the asset's painted bounds.
+    #[serde(default, rename = "aidaLogicalSize")]
+    pub logical_size: Option<[f64; 2]>,
     #[serde(default, rename = "rotationCenterX")]
     pub rotation_center_x: f64,
     #[serde(default, rename = "rotationCenterY")]
@@ -320,6 +330,14 @@ pub fn parse_input(input: &Value) -> Option<InputValue<'_>> {
 
 pub fn parse_project(json_str: &str) -> Result<ScratchProject, serde_json::Error> {
     let mut project: ScratchProject = serde_json::from_str(json_str)?;
+    let target_identities = Arc::new(
+        project
+            .targets
+            .iter()
+            .enumerate()
+            .map(|(index, target)| (target.name.clone(), index, target.is_stage))
+            .collect(),
+    );
     let broadcasts = project
         .targets
         .iter()
@@ -327,6 +345,7 @@ pub fn parse_project(json_str: &str) -> Result<ScratchProject, serde_json::Error
         .map(|stage| stage.broadcasts.clone())
         .unwrap_or_default();
     for target in &mut project.targets {
+        target.target_identities = Arc::clone(&target_identities);
         for (id, name) in &broadcasts {
             target
                 .broadcasts

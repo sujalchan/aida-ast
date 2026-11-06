@@ -330,3 +330,211 @@ fn loop_lowering_borrows_variables_and_converts_only_dynamic_conditions() {
     assert_eq!(output.matches("scratch_round(state.get(2))").count(), 1);
     assert!(output.contains("return ScriptStatus::Yield;"));
 }
+
+#[test]
+fn sensing_of_fixture_resolves_static_targets_including_sprites_without_scripts() {
+    let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/sensing-of.sb3");
+    let json = crate::extractor::read_project_json(input).unwrap();
+    let project = parse_project(&json).unwrap();
+    let output = generate(&project);
+
+    for generated in [
+        "state.sensing_of_target_slot(0, \"backdrop #\", None)",
+        "state.sensing_of_target_slot(0, \"backdrop name\", None)",
+        "state.sensing_of_target_slot(0, \"volume\", None)",
+        "state.sensing_of_target_slot(0, \"another variable\", Some(",
+        "state.sensing_of_target_slot(2, \"x position\", None)",
+        "state.sensing_of_target_slot(2, \"y position\", None)",
+        "state.sensing_of_target_slot(2, \"direction\", None)",
+        "state.register_target(2, \"Sprite2\", false);",
+    ] {
+        assert!(
+            output.contains(generated),
+            "missing generated path: {generated}"
+        );
+    }
+    assert_eq!(output.matches("state.sensing_of_target_slot(").count(), 7);
+    assert!(!output.contains("state.sensing_of_by_name("));
+    assert!(!output.contains("unsupported reporter: sensing_of"));
+}
+
+#[test]
+fn sensing_of_mutations_fixture_reads_properties_after_script_updates() {
+    let input = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/src/sensing-of-mutations.sb3"
+    );
+    let json = crate::extractor::read_project_json(input).unwrap();
+    let project = parse_project(&json).unwrap();
+    let output = generate(&project);
+
+    assert_eq!(output.matches("state.sensing_of_target_slot(").count(), 11);
+    assert!(output.contains("state.sensing_of_target_slot(2, \"x position\", None)"));
+    assert!(output.contains("state.sensing_of_target_slot(2, \"size\", None)"));
+    assert!(output.contains("state.sensing_of_target_slot(0, \"backdrop #\", None)"));
+    assert!(output.contains(
+        "let scratch_size_input = scratch_to_number(80.0_f64); state.set_size(scratch_size_input);"
+    ));
+    assert!(output.contains("let scratch_size_input = scratch_to_number(-5.0_f64); state.change_size_by(scratch_size_input);"));
+    assert!(!output.contains("state.sensing_of_by_name("));
+}
+
+#[test]
+fn sensing_of_accepts_a_dynamic_object_reporter_and_handles_dangling_menu_ids() {
+    let project = parse_project(
+        &json!({
+            "targets": [
+                {
+                    "name": "Stage",
+                    "isStage": true,
+                    "variables": {"target_id": ["target", "Sprite2"]},
+                    "blocks": {
+                        "hat": {"opcode": "event_whenflagclicked", "next": "say", "topLevel": true},
+                        "say": {"opcode": "looks_say", "inputs": {"MESSAGE": [3, "sensor", [10, "_stage_"]]}},
+                        "sensor": {"opcode": "sensing_of", "inputs": {"OBJECT": [3, "target_reporter", "menu"]}, "fields": {"PROPERTY": ["x position", null]}},
+                        "target_reporter": {"opcode": "data_variable", "fields": {"VARIABLE": ["target", "target_id"]}},
+                        "menu": {"opcode": "sensing_of_object_menu", "shadow": true, "fields": {"OBJECT": ["_stage_", null]}}
+                    }
+                },
+                {"name": "Sprite2", "isStage": false}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = generate(&project);
+    assert!(output.contains("state.sensing_of_by_name(state.get_shared(0), \"x position\")"));
+    assert!(output.contains("state.register_target(1, \"Sprite2\", false);"));
+    assert!(!output.contains("unsupported reporter: sensing_of"));
+
+    let dangling = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Stage", "isStage": true,
+                "blocks": {
+                    "hat": {"opcode": "event_whenflagclicked", "next": "say", "topLevel": true},
+                    "say": {"opcode": "looks_say", "inputs": {"MESSAGE": [2, "sensor"]}},
+                    "sensor": {"opcode": "sensing_of", "inputs": {"OBJECT": [1, "missing-menu"]}, "fields": {"PROPERTY": ["x position", null]}}
+                }
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = generate(&dangling);
+    assert!(output.contains("ScratchValue::Number(0.0_f64)"));
+
+    let malformed = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Stage", "isStage": true,
+                "blocks": {
+                    "hat": {"opcode": "event_whenflagclicked", "next": "say", "topLevel": true},
+                    "say": {"opcode": "looks_say", "inputs": {"MESSAGE": [2, "sensor"]}},
+                    "sensor": {"opcode": "sensing_of", "inputs": {"OBJECT": [1, "menu"]}, "fields": {"PROPERTY": ["x position", null]}},
+                    "menu": {"opcode": "sensing_of_object_menu", "shadow": true, "fields": {}}
+                }
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = generate(&malformed);
+    assert!(!output.contains("state.sensing_of_by_name("));
+    assert!(output.contains("ScratchValue::Number(0.0_f64)"));
+}
+
+#[test]
+fn sensing_of_flows_through_assignments_conditions_loops_and_custom_arguments() {
+    let mut blocks = serde_json::Map::new();
+    blocks.insert(
+        "hat".to_owned(),
+        json!({"opcode":"event_whenflagclicked", "next":"set", "topLevel":true}),
+    );
+    blocks.insert(
+        "set".to_owned(),
+        json!({"opcode":"data_setvariableto", "next":"change", "inputs":{"VALUE":[3,"sum",[10,""]]}, "fields":{"VARIABLE":["value","value_id"]}}),
+    );
+    blocks.insert(
+        "sum".to_owned(),
+        json!({"opcode":"operator_add", "inputs":{"NUM1":[3,"sense1",[10,"0"]], "NUM2":[3,"sense2",[10,"0"]]}}),
+    );
+    blocks.insert(
+        "change".to_owned(),
+        json!({"opcode":"data_changevariableby", "next":"if", "inputs":{"VALUE":[3,"sense3",[10,"0"]]}, "fields":{"VARIABLE":["value","value_id"]}}),
+    );
+    blocks.insert(
+        "if".to_owned(),
+        json!({"opcode":"control_if", "next":"repeat", "inputs":{"CONDITION":[3,"sense4",[10,"0"]], "SUBSTACK":[2,"if_body"]}}),
+    );
+    blocks.insert(
+        "if_body".to_owned(),
+        json!({"opcode":"data_setvariableto", "inputs":{"VALUE":[1,[4,"1"]]}, "fields":{"VARIABLE":["value","value_id"]}}),
+    );
+    blocks.insert(
+        "repeat".to_owned(),
+        json!({"opcode":"control_repeat_until", "next":"call", "inputs":{"CONDITION":[3,"sense5",[10,"0"]], "SUBSTACK":[2,"repeat_body"]}}),
+    );
+    blocks.insert(
+        "repeat_body".to_owned(),
+        json!({"opcode":"data_changevariableby", "inputs":{"VALUE":[1,[4,"1"]]}, "fields":{"VARIABLE":["value","value_id"]}}),
+    );
+    blocks.insert(
+        "call".to_owned(),
+        json!({"opcode":"procedures_call", "inputs":{"argument_id":[3,"sense6",[10,"0"]]}, "mutation":{"proccode":"take %s", "argumentids":"[\"argument_id\"]", "warp":"false"}}),
+    );
+    blocks.insert(
+        "definition".to_owned(),
+        json!({"opcode":"procedures_definition", "next":"procedure_set", "topLevel":true, "inputs":{"custom_block":[1,"prototype"]}}),
+    );
+    blocks.insert(
+        "prototype".to_owned(),
+        json!({"opcode":"procedures_prototype", "parent":"definition", "inputs":{"argument_id":[1,"argument_default"]}, "mutation":{"proccode":"take %s", "argumentnames":"[\"value\"]", "argumentids":"[\"argument_id\"]", "argumentdefaults":"[\"\"]", "warp":"false"}}),
+    );
+    blocks.insert(
+        "argument_default".to_owned(),
+        json!({"opcode":"argument_reporter_string_number", "parent":"prototype", "shadow":true, "fields":{"VALUE":["value",null]}}),
+    );
+    blocks.insert(
+        "procedure_set".to_owned(),
+        json!({"opcode":"data_setvariableto", "parent":"definition", "inputs":{"VALUE":[3,"argument",[10,""]]}, "fields":{"VARIABLE":["value","value_id"]}}),
+    );
+    blocks.insert(
+        "argument".to_owned(),
+        json!({"opcode":"argument_reporter_string_number", "parent":"procedure_set", "fields":{"VALUE":["value",null]}}),
+    );
+
+    for (index, id) in (1..=6).map(|index| (index, format!("sense{index}"))) {
+        let menu = format!("menu{index}");
+        blocks.insert(
+            id,
+            json!({"opcode":"sensing_of", "inputs":{"OBJECT":[1,menu]}, "fields":{"PROPERTY":["size",null]}}),
+        );
+        blocks.insert(
+            menu,
+            json!({"opcode":"sensing_of_object_menu", "shadow":true, "fields":{"OBJECT":["Sprite2",null]}}),
+        );
+    }
+
+    let project = parse_project(
+        &json!({
+            "targets": [
+                {"name":"Stage", "isStage":true},
+                {"name":"Sprite1", "isStage":false, "variables":{"value_id":["value",0]}, "blocks":blocks},
+                {"name":"Sprite2", "isStage":false}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = generate(&project);
+
+    assert!(
+        output
+            .matches("state.sensing_of_target_slot(2, \"size\", None)")
+            .count()
+            >= 6
+    );
+    assert!(!output.contains("state.sensing_of_by_name("));
+    assert!(!output.contains("unsupported reporter: sensing_of"));
+}

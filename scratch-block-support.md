@@ -12,11 +12,11 @@ The opcode audit used Scratch Blocks `develop` at [`95817145`](https://github.co
 
 | Fully implemented | Partially implemented | Not implemented |
 |---:|---:|---:|
-| **116** | **1** | **17** |
+| **121** | **1** | **12** |
 
 These totals count only the current Scratch runtime opcode section below. Editor and serialized-input helpers and legacy compatibility opcodes are listed separately.
 
-**Generated counts:** current runtime: 134 (116 implemented, 1 partial, 17 unsupported); editor and serialized helpers: 30; legacy no-ops: 9; legacy executable: 12; total classified identifiers: 185.
+**Generated counts:** current runtime: 134 (121 implemented, 1 partial, 12 unsupported); editor and serialized helpers: 30; legacy no-ops: 9; legacy executable: 12; total classified identifiers: 185.
 
 The totals summarize the inventory sections below.
 
@@ -99,11 +99,11 @@ These are Scratch VM blocks that represent runtime behavior, including hats, rep
 | `looks_changeeffectby` | x |
 | `looks_seteffectto` | x |
 | `looks_cleargraphiceffects` | x |
-| `looks_changesizeby` | x |
-| `looks_setsizeto` | x |
-| `looks_size` | - |
+| `looks_changesizeby` | ✓ |
+| `looks_setsizeto` | ✓ |
+| `looks_size` | ✓ |
 | `looks_switchcostumeto` | ✓ |
-| `looks_nextcostume` | x |
+| `looks_nextcostume` | ✓ |
 | `looks_switchbackdropto` | ✓ |
 | `looks_gotofrontback` | x |
 | `looks_goforwardbackwardlayers` | x |
@@ -177,7 +177,7 @@ These are Scratch VM blocks that represent runtime behavior, including hats, rep
 | `sensing_loudness` | ✓ |
 | `sensing_timer` | ✓ |
 | `sensing_resettimer` | ✓ |
-| `sensing_of` | x |
+| `sensing_of` | ✓ |
 | `sensing_current` | ✓ |
 | `sensing_dayssince2000` | ✓ |
 | `sensing_username` | ✓ |

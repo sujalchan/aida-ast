@@ -239,9 +239,9 @@ pub(in crate::rust) fn generate_direct_procedures(
         for procedure in procedures.iter().filter(|procedure| {
             reachable_procedure_ids.contains(&procedure.definition_id)
                 && eligibility
-                .get(&procedure.definition_id)
-                .copied()
-                .unwrap_or(false)
+                    .get(&procedure.definition_id)
+                    .copied()
+                    .unwrap_or(false)
                 && !direct_eligible(target, procedure)
         }) {
             let arguments = procedure
