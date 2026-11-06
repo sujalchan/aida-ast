@@ -27,8 +27,8 @@ pub(in crate::rust) struct ResumableProcedurePlan {
     numeric_call_procedures: HashSet<String>,
 }
 
-const RESUMABLE_PARTITION_THRESHOLD_BYTES: usize = 64 * 1024;
-const RESUMABLE_PARTITION_TARGET_BYTES: usize = 24 * 1024;
+const RESUMABLE_PARTITION_THRESHOLD_BYTES: usize = 12 * 1024;
+const RESUMABLE_PARTITION_TARGET_BYTES: usize = 12 * 1024;
 
 #[derive(Clone)]
 struct GeneratedStateArm {
@@ -114,7 +114,7 @@ fn partition_generated_state_arms(
             arms: current_arms,
         });
     }
-    Some(partitions)
+    (partitions.len() > 1).then_some(partitions)
 }
 
 fn collect_graph_state_arms(

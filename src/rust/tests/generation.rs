@@ -67,7 +67,10 @@ fn engine_resumable_procedures_are_split_into_bounded_native_workers() {
         );
     }
 
-    assert!(worker_sizes.len() > 1, "expected partition workers");
+    assert!(
+        worker_sizes.len() > 34,
+        "expected smaller partitions to increase the worker count"
+    );
     assert!(
         worker_sizes.iter().all(|size| *size <= 40 * 1024),
         "worker source exceeded the single-arm allowance: {} bytes",
