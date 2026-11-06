@@ -41,6 +41,52 @@ fn numeric_direct_variants_are_omitted_when_no_call_site_uses_them() {
 }
 
 #[test]
+fn engine_resumable_procedures_are_split_into_bounded_native_workers() {
+    let input = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/programs/engine-from-nowhere.sb3"
+    );
+    let json = crate::extractor::read_project_json(input).unwrap();
+    let project = parse_project(&json).unwrap();
+    let output = generate(&project);
+
+    let lines = output.lines().collect::<Vec<_>>();
+    let mut worker_sizes = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if !line.starts_with("fn step_") || !line.contains("_partition_") {
+            continue;
+        }
+        let end = (index + 1..lines.len())
+            .find(|next| lines[*next].starts_with("fn "))
+            .unwrap_or(lines.len());
+        worker_sizes.push(
+            lines[index..end]
+                .iter()
+                .map(|line| line.len() + 1)
+                .sum::<usize>(),
+        );
+    }
+
+    assert!(worker_sizes.len() > 1, "expected partition workers");
+    assert!(
+        worker_sizes.iter().all(|size| *size <= 40 * 1024),
+        "worker source exceeded the single-arm allowance: {} bytes",
+        worker_sizes.iter().copied().max().unwrap_or_default()
+    );
+    assert!(output.contains("#[inline(never)]\n#[allow(dead_code"));
+}
+
+#[test]
+fn small_resumable_fixture_keeps_its_single_step_function() {
+    let input = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/src/loops.sb3");
+    let json = crate::extractor::read_project_json(input).unwrap();
+    let project = parse_project(&json).unwrap();
+    let output = generate(&project);
+
+    assert!(!output.contains("_partition_"));
+}
+
+#[test]
 fn generated_program_exposes_tick_redraw_and_input_state_to_compiled_code() {
     let project = parse_project(
             &json!({

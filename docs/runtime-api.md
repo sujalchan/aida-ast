@@ -271,6 +271,3 @@ script is waiting. Event-loop hosts should use `advance()` and schedule the
 returned deadline themselves. Infinite scripts intentionally keep the blocking
 wrapper active; `is_complete()` reports when all finite scripts have been
 removed from scheduling.
-
-The separate AIDA text generator remains available for `.aida` output. Its
-block coverage does not imply equivalent Rust lowering.

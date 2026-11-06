@@ -2,11 +2,7 @@
 
 `aida-ast` reads Scratch 3 project archives (`.sb3`), parses their targets,
 variables, lists, block connections, inputs, and procedures, then generates
-source code from that project. It has two output paths:
-
-- **AIDA text** (`.aida`), a readable representation of Scratch blocks.
-- **Rust runtime code**, a generated project module that works with
-  [`aida-runtime`](../aida-runtime/README.md).
+Rust runtime code for [`aida-runtime`](../aida-runtime/README.md).
 
 `aida-ast` is a compiler and source generator. It does not execute the Scratch
 project. The runtime crate builds and runs the generated Rust module.
@@ -49,16 +45,15 @@ for the combined launcher and more examples.
 cargo run --release -p aida-ast -- --tests
 ```
 
-With no arguments, the legacy text-generation path reads `example.sb3` from the
-current directory and writes `project.json` and `project.aida` there.
+The command requires either `--runtime <output.rs> <input.sb3>` or `--tests`.
 
 ## What it parses and generates
 
 The parser reads the project archive and resolves Scratch block IDs and
-connections into project, target, variable, list, and block data. The AIDA text
-generator renders a readable intermediate form. The Rust generator emits
-resumable scripts and project state for the runtime, using runtime helpers for
-Scratch value conversions, operators, waits, broadcasts, clones, and scheduling.
+connections into project, target, variable, list, and block data. The Rust
+generator emits resumable scripts and project state for the runtime, using
+runtime helpers for Scratch value conversions, operators, waits, broadcasts,
+clones, and scheduling.
 
 ### Implemented Rust blocks
 
@@ -82,13 +77,9 @@ The Rust backend currently executes these supported groups:
 - **Sensing:** key state and mouse state/position use graphical input; the
   timer works in both graphical and headless modes.
 
-This is the executable Rust backend list, not the broader set of blocks that
-can be represented as AIDA text. The [block support table](scratch-block-support.md)
-lists every catalogued opcode and marks its AIDA-text and Rust-runtime status.
+This is the executable Rust backend list. The [block support table](scratch-block-support.md)
+lists catalogued opcodes and their Rust-runtime status.
 The [runtime guide](docs/runtime-api.md) describes scheduling and edge cases.
-
-The AIDA text generator recognizes the catalogued Pen and other extension
-commands, but the Rust runtime does not execute those extension blocks yet.
 
 ## Current implementation
 
@@ -96,7 +87,6 @@ These links go to the implementation used by this repository:
 
 - [Scratch archive extraction](src/extractor.rs)
 - [Project and block parsing](src/parser.rs)
-- [AIDA text generation](src/aida/)
 - [Rust code generation](src/rust/)
 - [Runtime scheduler and Scratch value helpers](../aida-runtime/src/runtime/)
 

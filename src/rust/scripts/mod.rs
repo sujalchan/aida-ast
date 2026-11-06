@@ -27,8 +27,7 @@ use super::{
     project::{ListInfo, VariableInfo, rust_identifier},
     statements::{
         DirectProcedureOptions, ResumableScriptOptions, generate_direct_procedures,
-        generate_resumable_procedure_step, generate_resumable_script,
-        prepare_resumable_procedures,
+        generate_resumable_procedure_step, generate_resumable_script, prepare_resumable_procedures,
     },
 };
 
@@ -347,10 +346,16 @@ pub(super) fn generate_green_flag_functions(
         let step = resumable_outputs
             .get_mut(&script.function)
             .expect("every event script has a generated step function");
-        let canonical_source = step.source.replace(
-            &format!("fn step_{}(", script.function),
-            "fn __shared_script_step(",
-        );
+        let canonical_source = step
+            .source
+            .replace(
+                &format!("fn step_{}(", script.function),
+                "fn __shared_script_step(",
+            )
+            .replace(
+                &format!("step_{}_partition_", script.function),
+                "step___shared_script_partition_",
+            );
         let key = (
             script.target_index,
             step.start_pc,
@@ -382,9 +387,7 @@ pub(super) fn generate_green_flag_functions(
                     fast_math,
                     no_warp_timer,
                     reachable_procedure_ids: procedure_plan.reachable_ids().clone(),
-                    numeric_call_procedure_ids: procedure_plan
-                        .numeric_call_procedure_ids()
-                        .clone(),
+                    numeric_call_procedure_ids: procedure_plan.numeric_call_procedure_ids().clone(),
                 },
                 output,
             );

@@ -18,7 +18,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-mod aida;
 mod extractor;
 #[allow(dead_code)]
 mod parser;
@@ -57,25 +56,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(argument) => {
             return Err(format!("unknown argument: {argument}\nusage: aida-ast [--fast-math] [--tests] | --runtime <output.rs> <input.sb3>").into());
         }
-        None => {}
+        None => {
+            return Err(
+                "usage: aida-ast [--fast-math] [--tests] | --runtime <output.rs> <input.sb3>"
+                    .into(),
+            );
+        }
     }
-
-    let sb3_input = "example.sb3";
-    let json_output = "project.json";
-    let aida_output = "project.aida";
-
-    extractor::extract_project_json(sb3_input, json_output)?;
-    println!("Extracted {json_output} from {sb3_input}");
-
-    let json_str = fs::read_to_string(json_output)?;
-
-    let project = parser::parse_project(&json_str)?;
-    parser::print_project(&project);
-
-    fs::write(aida_output, aida::generate(&project))?;
-    println!("Generated {aida_output}");
-
-    Ok(())
 }
 
 fn compile_runtime_module(

@@ -41,7 +41,7 @@ npx --yes @vscode/vsce package --no-dependencies
 This creates an installable VSIX locally. Packaging does not publish the extension.
 The generated VSIX is ignored by Git.
 
-The grammar follows the syntax documented in `docs/aida.md` in the repository.
+The extension provides syntax highlighting for existing `.aida` source files.
 See VS Code's [syntax highlighting guide](https://code.visualstudio.com/api/language-extensions/syntax-highlight-guide)
 and [packaging guide](https://code.visualstudio.com/api/working-with-extensions/publishing-extension)
 for the underlying extension format and packaging tool.

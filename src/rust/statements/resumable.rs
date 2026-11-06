@@ -27,6 +27,379 @@ pub(in crate::rust) struct ResumableProcedurePlan {
     numeric_call_procedures: HashSet<String>,
 }
 
+const RESUMABLE_PARTITION_THRESHOLD_BYTES: usize = 64 * 1024;
+const RESUMABLE_PARTITION_TARGET_BYTES: usize = 24 * 1024;
+
+#[derive(Clone)]
+struct GeneratedStateArm {
+    function_id: usize,
+    pc: usize,
+    source: String,
+}
+
+struct GeneratedStatePartition {
+    function_id: usize,
+    index: usize,
+    first_pc: usize,
+    last_pc: usize,
+    arms: Vec<GeneratedStateArm>,
+}
+
+fn partition_generated_state_arms(
+    source_arms: &[GeneratedStateArm],
+) -> Option<Vec<GeneratedStatePartition>> {
+    let total_bytes = source_arms
+        .iter()
+        .map(|arm| arm.source.len())
+        .sum::<usize>();
+    if total_bytes <= RESUMABLE_PARTITION_THRESHOLD_BYTES {
+        return None;
+    }
+
+    let mut arms = source_arms.to_vec();
+    arms.sort_by_key(|arm| (arm.function_id, arm.pc));
+    let mut partitions = Vec::new();
+    let mut current_arms: Vec<GeneratedStateArm> = Vec::new();
+    let mut current_bytes = 0;
+    let mut current_function = None;
+    let mut partition_index = 0;
+
+    for arm in arms {
+        if !current_arms.is_empty()
+            && (current_function != Some(arm.function_id)
+                || current_bytes + arm.source.len() > RESUMABLE_PARTITION_TARGET_BYTES)
+        {
+            let first_pc = current_arms.first().unwrap().pc;
+            let last_pc = current_arms.last().unwrap().pc;
+            partitions.push(GeneratedStatePartition {
+                function_id: current_function.unwrap(),
+                index: partition_index,
+                first_pc,
+                last_pc,
+                arms: std::mem::take(&mut current_arms),
+            });
+            current_bytes = 0;
+            partition_index += 1;
+        }
+        if current_function != Some(arm.function_id) {
+            current_function = Some(arm.function_id);
+            partition_index = 0;
+        }
+        current_bytes += arm.source.len();
+        current_arms.push(arm);
+
+        // Keep an individually large PC arm intact and alone in its worker.
+        if current_bytes >= RESUMABLE_PARTITION_TARGET_BYTES {
+            let first_pc = current_arms.first().unwrap().pc;
+            let last_pc = current_arms.last().unwrap().pc;
+            partitions.push(GeneratedStatePartition {
+                function_id: current_function.unwrap(),
+                index: partition_index,
+                first_pc,
+                last_pc,
+                arms: std::mem::take(&mut current_arms),
+            });
+            current_bytes = 0;
+            partition_index += 1;
+        }
+    }
+    if !current_arms.is_empty() {
+        let first_pc = current_arms.first().unwrap().pc;
+        let last_pc = current_arms.last().unwrap().pc;
+        partitions.push(GeneratedStatePartition {
+            function_id: current_function.unwrap(),
+            index: partition_index,
+            first_pc,
+            last_pc,
+            arms: current_arms,
+        });
+    }
+    Some(partitions)
+}
+
+fn collect_graph_state_arms(
+    context: ScriptBlockChainContext<'_>,
+    function_id: usize,
+) -> Vec<GeneratedStateArm> {
+    let mut arms = Vec::new();
+    let mut emitted_blocks = HashSet::new();
+    for node in &context.graph.nodes {
+        let (pc, mut source) = match node {
+            ScriptNode::Block(id) => {
+                let pc = context.graph.block_pcs[id];
+                let mut source = String::new();
+                generate_resumable_block_chain(context, id, &mut emitted_blocks, &mut source);
+                (pc, source)
+            }
+            ScriptNode::LoopBoundary(id) => {
+                let pc = context.graph.boundary_pcs[id];
+                let mut source = String::new();
+                let structured_repeat = structured_repeat_body(
+                    context.target,
+                    id,
+                    context.procedures,
+                    context.procedure_entries,
+                )
+                .is_some_and(|body| !body.has_procedure_calls);
+                if !structured_repeat
+                    && context
+                        .target
+                        .blocks
+                        .get(id)
+                        .and_then(|block| {
+                            numeric_loop_plan(context.target, block, context.variables)
+                        })
+                        .is_none()
+                {
+                    generate_loop_boundary(
+                        context.target,
+                        id,
+                        context.graph,
+                        context.no_warp_timer,
+                        &mut source,
+                    );
+                }
+                (pc, source)
+            }
+        };
+        if !source.is_empty() {
+            arms.push(GeneratedStateArm {
+                function_id,
+                pc,
+                source: std::mem::take(&mut source),
+            });
+        }
+    }
+    arms
+}
+
+fn collect_procedure_state_arms(
+    target: &ScratchTarget,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    procedures: &[ProcedureSignature],
+    plan: &ResumableProcedurePlan,
+    fast_math: bool,
+    no_warp_timer: bool,
+) -> Vec<GeneratedStateArm> {
+    let mut arms = Vec::new();
+    for (procedure, graph) in &plan.graphs {
+        let argument_accesses = procedure
+            .argument_names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                (
+                    name.clone(),
+                    format!("script.frames.last().unwrap().arguments[{index}]"),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let context = ScriptBlockChainContext {
+            target,
+            graph,
+            variables,
+            lists,
+            arguments: &argument_accesses,
+            procedures,
+            procedure_entries: &plan.entries,
+            fast_math,
+            no_warp_timer,
+        };
+        arms.extend(collect_graph_state_arms(context, procedure.frame_id));
+    }
+    arms
+}
+
+fn emit_unpartitioned_procedure_arms(
+    plan: &ResumableProcedurePlan,
+    arms: &[GeneratedStateArm],
+    output: &mut String,
+) {
+    for (procedure, _) in &plan.graphs {
+        line(output, 3, &format!("{} => match pc {{", procedure.frame_id));
+        for arm in arms
+            .iter()
+            .filter(|arm| arm.function_id == procedure.frame_id)
+        {
+            output.push_str(&arm.source);
+        }
+        line(output, 4, "_ => { script.frames.pop(); continue; },");
+        line(output, 3, "},");
+    }
+}
+
+fn wrap_state_arm_status_returns(source: &str) -> String {
+    let mut output = Vec::with_capacity(source.len() + 64);
+    let mut cursor = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    let bytes = source.as_bytes();
+    while cursor < bytes.len() {
+        if in_string {
+            let byte = bytes[cursor];
+            output.push(byte);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            cursor += 1;
+            continue;
+        }
+        if bytes[cursor] == b'"' {
+            in_string = true;
+            output.push(b'"');
+            cursor += 1;
+            continue;
+        }
+        const PREFIX: &[u8] = b"return ScriptStatus::";
+        if bytes[cursor..].starts_with(PREFIX) {
+            output.extend_from_slice(b"return Some(ScriptStatus::");
+            cursor += PREFIX.len();
+            let mut depth = 0usize;
+            let mut expression_in_string = false;
+            let mut expression_escaped = false;
+            while cursor < bytes.len() {
+                let byte = bytes[cursor];
+                output.push(byte);
+                if expression_in_string {
+                    if expression_escaped {
+                        expression_escaped = false;
+                    } else if byte == b'\\' {
+                        expression_escaped = true;
+                    } else if byte == b'"' {
+                        expression_in_string = false;
+                    }
+                } else if byte == b'"' {
+                    expression_in_string = true;
+                } else if matches!(byte, b'(' | b'{' | b'[') {
+                    depth += 1;
+                } else if matches!(byte, b')' | b'}' | b']') {
+                    depth = depth.saturating_sub(1);
+                } else if byte == b';' && depth == 0 {
+                    output.insert(output.len() - 1, b')');
+                    cursor += 1;
+                    break;
+                }
+                cursor += 1;
+            }
+            continue;
+        }
+        output.push(bytes[cursor]);
+        cursor += 1;
+    }
+    String::from_utf8(output).expect("generated Rust arm remains valid UTF-8")
+}
+
+fn partition_worker_name(function_name: &str, partition: &GeneratedStatePartition) -> String {
+    format!(
+        "step_{function_name}_partition_{}_{}",
+        partition.function_id, partition.index
+    )
+}
+
+fn partition_pc_guard(partition: &GeneratedStatePartition) -> String {
+    if partition.first_pc == 0 {
+        format!("pc <= {}", partition.last_pc)
+    } else {
+        format!(
+            "pc >= {} && pc <= {}",
+            partition.first_pc, partition.last_pc
+        )
+    }
+}
+
+fn emit_partition_worker(
+    function_name: &str,
+    partition: &GeneratedStatePartition,
+    procedure_state: bool,
+    output: &mut String,
+) {
+    let worker_name = partition_worker_name(function_name, partition);
+    line(output, 0, "#[inline(never)]");
+    line(
+        output,
+        0,
+        "#[allow(dead_code, unused_variables, unused_mut, unused_assignments, unreachable_code)]",
+    );
+    line(
+        output,
+        0,
+        &format!(
+            "fn {worker_name}(script: &mut ScriptState, state: &mut ScratchState, clock: &dyn Clock) -> Option<ScriptStatus> {{"
+        ),
+    );
+    line(output, 1, "loop {");
+    line(
+        output,
+        2,
+        "let Some(frame) = script.frames.last() else { return Some(ScriptStatus::Complete); };",
+    );
+    line(
+        output,
+        2,
+        &format!(
+            "if frame.function != {} {{ return None; }}",
+            partition.function_id
+        ),
+    );
+    line(output, 2, "let pc = frame.pc;");
+    line(output, 2, "match pc {");
+    for arm in &partition.arms {
+        output.push_str(&wrap_state_arm_status_returns(&arm.source));
+    }
+    let pc_guard = partition_pc_guard(partition);
+    if procedure_state {
+        line(
+            output,
+            3,
+            &format!("_ if {pc_guard} => {{ script.frames.pop(); return None; }},"),
+        );
+    } else {
+        line(
+            output,
+            3,
+            &format!("_ if {pc_guard} => return Some(ScriptStatus::Complete),"),
+        );
+    }
+    line(output, 3, "_ => return None,");
+    line(output, 2, "}");
+    line(output, 1, "}");
+    line(output, 0, "}\n");
+}
+
+fn emit_partition_pc_dispatch(
+    output: &mut String,
+    function_name: &str,
+    partitions: &[GeneratedStatePartition],
+    function_id: usize,
+    procedure_state: bool,
+    indent: usize,
+) {
+    for partition in partitions
+        .iter()
+        .filter(|partition| partition.function_id == function_id)
+    {
+        let worker_name = partition_worker_name(function_name, partition);
+        line(
+            output,
+            indent,
+            &format!(
+                "{}..={} => match {worker_name}(script, state, clock) {{ Some(status) => return status, None => continue, }},",
+                partition.first_pc, partition.last_pc
+            ),
+        );
+    }
+    if procedure_state {
+        line(output, indent, "_ => { script.frames.pop(); continue; },");
+    } else {
+        line(output, indent, "_ => return ScriptStatus::Complete,");
+    }
+}
+
 impl ResumableProcedurePlan {
     pub(in crate::rust) fn has_resumable_procedures(&self) -> bool {
         !self.graphs.is_empty()
@@ -183,6 +556,72 @@ pub(in crate::rust) fn generate_resumable_procedure_step(
     if plan.graphs.is_empty() || !share_procedures {
         return;
     }
+
+    let procedure_arms = collect_procedure_state_arms(
+        target,
+        variables,
+        lists,
+        procedures,
+        plan,
+        fast_math,
+        no_warp_timer,
+    );
+    if let Some(partitions) = partition_generated_state_arms(&procedure_arms) {
+        line(
+            output,
+            0,
+            "#[allow(dead_code, unused_variables, unused_mut, unused_assignments, unreachable_code)]",
+        );
+        line(
+            output,
+            0,
+            &format!(
+                "fn step_procedures_{}(script: &mut ScriptState, state: &mut ScratchState, clock: &dyn Clock, returned_to_script: &mut bool) -> ScriptStatus {{",
+                plan.target_index
+            ),
+        );
+        line(output, 1, "loop {");
+        line(
+            output,
+            2,
+            "let (function, pc) = match script.frames.last() {",
+        );
+        line(output, 3, "Some(frame) => (frame.function, frame.pc),");
+        line(output, 3, "None => return ScriptStatus::Complete,");
+        line(output, 2, "};");
+        line(output, 2, "match function {");
+        line(
+            output,
+            3,
+            "0 => { *returned_to_script = true; return ScriptStatus::Complete; },",
+        );
+        for (procedure, _) in &plan.graphs {
+            line(output, 3, &format!("{} => match pc {{", procedure.frame_id));
+            emit_partition_pc_dispatch(
+                output,
+                &format!("procedures_{}", plan.target_index),
+                &partitions,
+                procedure.frame_id,
+                true,
+                4,
+            );
+            line(output, 3, "},");
+        }
+        line(output, 3, "_ => return ScriptStatus::Complete,");
+        line(output, 2, "}");
+        line(output, 1, "}");
+        line(output, 0, "}\n");
+        for partition in &partitions {
+            emit_partition_worker(
+                &format!("procedures_{}", plan.target_index),
+                partition,
+                true,
+                output,
+            );
+        }
+        return;
+    }
+
     line(
         output,
         0,
@@ -211,81 +650,11 @@ pub(in crate::rust) fn generate_resumable_procedure_step(
         3,
         "0 => { *returned_to_script = true; return ScriptStatus::Complete; },",
     );
-    generate_resumable_procedure_arms(
-        target,
-        variables,
-        lists,
-        procedures,
-        plan,
-        fast_math,
-        no_warp_timer,
-        output,
-    );
+    emit_unpartitioned_procedure_arms(plan, &procedure_arms, output);
     line(output, 3, "_ => return ScriptStatus::Complete,");
     line(output, 2, "}");
     line(output, 1, "}");
     line(output, 0, "}\n");
-}
-
-fn generate_resumable_procedure_arms(
-    target: &ScratchTarget,
-    variables: &HashMap<String, VariableInfo>,
-    lists: &HashMap<String, ListInfo>,
-    procedures: &[ProcedureSignature],
-    plan: &ResumableProcedurePlan,
-    fast_math: bool,
-    no_warp_timer: bool,
-    output: &mut String,
-) {
-    for (procedure, graph) in &plan.graphs {
-        let argument_accesses = procedure
-            .argument_names
-            .iter()
-            .enumerate()
-            .map(|(index, name)| {
-                (
-                    name.clone(),
-                    format!("script.frames.last().unwrap().arguments[{index}]"),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        line(output, 3, &format!("{} => match pc {{", procedure.frame_id));
-        let mut emitted_blocks = HashSet::new();
-        let context = ScriptBlockChainContext {
-            target,
-            graph,
-            variables,
-            lists,
-            arguments: &argument_accesses,
-            procedures,
-            procedure_entries: &plan.entries,
-            fast_math,
-            no_warp_timer,
-        };
-        for node in &graph.nodes {
-            match node {
-                ScriptNode::Block(id) => {
-                    generate_resumable_block_chain(context, id, &mut emitted_blocks, output)
-                }
-                ScriptNode::LoopBoundary(id) => {
-                    let structured_repeat =
-                        structured_repeat_body(target, id, procedures, &plan.entries)
-                            .is_some_and(|body| !body.has_procedure_calls);
-                    if !structured_repeat
-                        && target
-                            .blocks
-                            .get(id)
-                            .and_then(|block| numeric_loop_plan(target, block, variables))
-                            .is_none()
-                    {
-                        generate_loop_boundary(target, id, graph, no_warp_timer, output)
-                    }
-                }
-            }
-        }
-        line(output, 4, "_ => { script.frames.pop(); continue; },");
-        line(output, 3, "},");
-    }
 }
 
 pub(in crate::rust) fn generate_resumable_script(
@@ -309,6 +678,33 @@ pub(in crate::rust) fn generate_resumable_script(
     let start_pc = first
         .and_then(|id| graph.block_pcs.get(id).copied())
         .unwrap_or(usize::MAX);
+
+    let no_arguments = HashMap::new();
+    let script_context = ScriptBlockChainContext {
+        target,
+        graph: &graph,
+        variables,
+        lists,
+        arguments: &no_arguments,
+        procedures,
+        procedure_entries: &procedure_plan.entries,
+        fast_math,
+        no_warp_timer,
+    };
+    let mut state_arms = collect_graph_state_arms(script_context, 0);
+    if !share_procedures {
+        state_arms.extend(collect_procedure_state_arms(
+            target,
+            variables,
+            lists,
+            procedures,
+            procedure_plan,
+            fast_math,
+            no_warp_timer,
+        ));
+    }
+    let partitions = partition_generated_state_arms(&state_arms);
+    let has_inline_procedures = !share_procedures && !procedure_plan.graphs.is_empty();
 
     line(
         output,
@@ -342,7 +738,43 @@ pub(in crate::rust) fn generate_resumable_script(
         line(output, 3, "continue;");
         line(output, 2, "}");
     }
-    if !share_procedures && !procedure_plan.graphs.is_empty() {
+    if partitions.is_some() {
+        line(
+            output,
+            2,
+            "let (function, pc) = match script.frames.last() {",
+        );
+        line(output, 3, "Some(frame) => (frame.function, frame.pc),");
+        line(output, 3, "None => return ScriptStatus::Complete,");
+        line(output, 2, "};");
+        line(output, 2, "match function {");
+        line(output, 3, "0 => match pc {");
+        emit_partition_pc_dispatch(
+            output,
+            function_name,
+            partitions.as_ref().unwrap(),
+            0,
+            false,
+            4,
+        );
+        line(output, 3, "},");
+        if has_inline_procedures {
+            for (procedure, _) in &procedure_plan.graphs {
+                line(output, 3, &format!("{} => match pc {{", procedure.frame_id));
+                emit_partition_pc_dispatch(
+                    output,
+                    function_name,
+                    partitions.as_ref().unwrap(),
+                    procedure.frame_id,
+                    true,
+                    4,
+                );
+                line(output, 3, "},");
+            }
+        }
+        line(output, 3, "_ => return ScriptStatus::Complete,");
+        line(output, 2, "}");
+    } else if has_inline_procedures {
         line(
             output,
             2,
@@ -360,61 +792,29 @@ pub(in crate::rust) fn generate_resumable_script(
         line(output, 2, "};");
         line(output, 2, "match pc {");
     }
-    let mut emitted_blocks = HashSet::new();
-    let no_arguments = HashMap::new();
-    let script_context = ScriptBlockChainContext {
-        target,
-        graph: &graph,
-        variables,
-        lists,
-        arguments: &no_arguments,
-        procedures,
-        procedure_entries: &procedure_plan.entries,
-        fast_math,
-        no_warp_timer,
-    };
-    for node in &graph.nodes {
-        match node {
-            ScriptNode::Block(id) => {
-                generate_resumable_block_chain(script_context, id, &mut emitted_blocks, output)
-            }
-            ScriptNode::LoopBoundary(id) => {
-                let structured_repeat =
-                    structured_repeat_body(target, id, procedures, &procedure_plan.entries)
-                        .is_some_and(|body| !body.has_procedure_calls);
-                if !structured_repeat
-                    && target
-                        .blocks
-                        .get(id)
-                        .and_then(|block| numeric_loop_plan(target, block, variables))
-                        .is_none()
-                {
-                    generate_loop_boundary(target, id, &graph, no_warp_timer, output);
-                }
-            }
+    if partitions.is_none() && has_inline_procedures {
+        for arm in state_arms.iter().filter(|arm| arm.function_id == 0) {
+            output.push_str(&arm.source);
         }
-    }
-    if !share_procedures && !procedure_plan.graphs.is_empty() {
         line(output, 3, "_ => return ScriptStatus::Complete,");
         line(output, 3, "},");
-        generate_resumable_procedure_arms(
-            target,
-            variables,
-            lists,
-            procedures,
-            procedure_plan,
-            fast_math,
-            no_warp_timer,
-            output,
-        );
+        emit_unpartitioned_procedure_arms(procedure_plan, &state_arms, output);
         line(output, 3, "_ => return ScriptStatus::Complete,");
         line(output, 2, "}");
-    } else {
+    } else if partitions.is_none() {
+        for arm in state_arms.iter().filter(|arm| arm.function_id == 0) {
+            output.push_str(&arm.source);
+        }
         line(output, 3, "_ => return ScriptStatus::Complete,");
         line(output, 2, "}");
     }
     line(output, 1, "}");
     line(output, 0, "}\n");
+    if let Some(partitions) = &partitions {
+        for partition in partitions {
+            emit_partition_worker(function_name, partition, partition.function_id != 0, output);
+        }
+    }
     (start_pc, graph.repeat_slots.len())
 }
 
