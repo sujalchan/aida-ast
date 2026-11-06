@@ -1534,10 +1534,12 @@ pub(super) fn collect_list_index_variables(
     match input.and_then(parse_input) {
         Some(InputValue::Number(_) | InputValue::String(_)) => true,
         Some(InputValue::VariableReference(reference)) => {
-            variables.get(reference.id).is_some_and(|variable| {
-                found.insert(variable.slot);
-                true
-            })
+            super::super::project::variable_for_target(target, reference.id, variables).is_some_and(
+                |variable| {
+                    found.insert(variable.slot);
+                    true
+                },
+            )
         }
         Some(InputValue::BlockReference(id)) => {
             if !active.insert(id.to_owned()) {

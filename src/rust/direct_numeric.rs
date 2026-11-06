@@ -103,7 +103,9 @@ impl<'a> Compiler<'a> {
                 })
             }
             InputValue::VariableReference(reference) => {
-                let variable = self.variables.get(reference.id)?.clone();
+                let variable =
+                    super::project::variable_for_target(self.target, reference.id, self.variables)?
+                        .clone();
                 Some(self.read_variable(variable, written))
             }
             InputValue::BlockReference(id) => {
@@ -282,7 +284,12 @@ impl<'a> Compiler<'a> {
                         self.dynamic_assignments.insert(variable.slot);
                         let source_variable = match input.and_then(parse_input) {
                             Some(InputValue::VariableReference(reference)) => {
-                                self.variables.get(reference.id).cloned()
+                                super::project::variable_for_target(
+                                    self.target,
+                                    reference.id,
+                                    self.variables,
+                                )
+                                .cloned()
                             }
                             Some(InputValue::BlockReference(id)) => {
                                 self.target.blocks.get(id).and_then(|block| {

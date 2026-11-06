@@ -21,10 +21,11 @@ pub(in crate::rust) fn expression(
     match input.and_then(parse_input) {
         Some(InputValue::Number(value)) => number_literal(value),
         Some(InputValue::String(value)) => text_literal(value),
-        Some(InputValue::VariableReference(reference)) => variables
-            .get(reference.id)
-            .map(VariableInfo::read_expression)
-            .unwrap_or_else(|| unsupported_expression("unknown variable")),
+        Some(InputValue::VariableReference(reference)) => {
+            super::super::project::variable_for_target(target, reference.id, variables)
+                .map(VariableInfo::read_expression)
+                .unwrap_or_else(|| unsupported_expression("unknown variable"))
+        }
         Some(InputValue::BlockReference(id)) => {
             if !active.insert(id.to_owned()) {
                 return unsupported_expression(&format!("expression cycle: {id}"));
@@ -414,7 +415,10 @@ fn sensing_of_expression(
                 return "ScratchValue::Number(0.0_f64)".to_owned();
             }
         }
-        Some(InputValue::VariableReference(reference)) if !variables.contains_key(reference.id) => {
+        Some(InputValue::VariableReference(reference))
+            if super::super::project::variable_for_target(target, reference.id, variables)
+                .is_none() =>
+        {
             return "ScratchValue::Number(0.0_f64)".to_owned();
         }
         Some(InputValue::ListReference(reference)) if !lists.contains_key(reference.id) => {
@@ -458,7 +462,7 @@ fn sensing_of_expression(
                     && variable.is_stage == *is_stage
                     && variable.name == property
             })
-            .min_by_key(|variable| variable.slot)
+            .min_by_key(|variable| variable.target_variable_order)
             .map(|variable| variable.slot);
         let is_builtin = if *is_stage {
             matches!(
@@ -504,11 +508,13 @@ pub(super) fn comparison_input_is_value_ref(
 ) -> bool {
     match input.and_then(parse_input) {
         Some(InputValue::VariableReference(reference)) => {
-            variables.get(reference.id).is_some_and(|v| {
-                v.index_read_override
-                    .as_deref()
-                    .is_none_or(|s| s.starts_with("&scratch_dynamic_"))
-            })
+            super::super::project::variable_for_target(target, reference.id, variables).is_some_and(
+                |v| {
+                    v.index_read_override
+                        .as_deref()
+                        .is_none_or(|s| s.starts_with("&scratch_dynamic_"))
+                },
+            )
         }
         Some(InputValue::BlockReference(id)) => target.blocks.get(id).is_some_and(|b| {
             b.opcode == "data_itemoflist"
@@ -543,7 +549,8 @@ pub(super) fn comparison_input_is_numeric(
             .and_then(|text| text.parse::<i32>().ok().map(|n| (text, n)))
             .is_some_and(|(text, n)| n.unsigned_abs() <= 1_000_000 && n.to_string() == text),
         Some(InputValue::VariableReference(reference)) => {
-            variables.get(reference.id).is_some_and(typed)
+            super::super::project::variable_for_target(target, reference.id, variables)
+                .is_some_and(typed)
         }
         Some(InputValue::BlockReference(id)) => target.blocks.get(id).is_some_and(|block| {
             (block.opcode == "data_variable"
@@ -610,7 +617,9 @@ pub(super) fn direct_variable_input(
     variables: &HashMap<String, VariableInfo>,
 ) -> Option<VariableInfo> {
     match input.and_then(parse_input)? {
-        InputValue::VariableReference(reference) => variables.get(reference.id).cloned(),
+        InputValue::VariableReference(reference) => {
+            super::super::project::variable_for_target(target, reference.id, variables).cloned()
+        }
         InputValue::BlockReference(id) => {
             let reporter = target.blocks.get(id)?;
             if reporter.opcode == "data_variable" {

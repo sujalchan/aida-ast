@@ -57,57 +57,81 @@ pub(super) fn allocate_variables(project: &ScratchProject) -> HashMap<String, Va
     let numeric_variables = numeric_variables(project);
     let non_nan_variables = non_nan_variables(project);
     let mut entries = BTreeMap::new();
-    for target in &project.targets {
-        for (id, variable) in &target.variables {
-            let info = entries.entry(id.clone()).or_insert_with(|| VariableInfo {
-                slot: 0,
-                name: variable.name.clone(),
-                target: target.name.clone(),
-                is_stage: target.is_stage,
-                target_index: project
-                    .targets
-                    .iter()
-                    .position(|candidate| {
-                        candidate.name == target.name && candidate.is_stage == target.is_stage
-                    })
-                    .unwrap_or(0),
-                numeric: numeric_variables.contains(id),
-                non_nan: non_nan_variables.contains(id),
-                monitor_visible: project
-                    .monitors
-                    .iter()
-                    .any(|monitor| monitor.visible && monitor.id == *id),
-                index_read_override: None,
+    for (target_index, target) in project.targets.iter().enumerate() {
+        let mut variable_ids = target.variable_order.clone();
+        let mut seen = variable_ids.iter().cloned().collect::<HashSet<_>>();
+        variable_ids.extend(
+            target
+                .variables
+                .keys()
+                .filter(|id| seen.insert((*id).clone()))
+                .cloned(),
+        );
+        for (target_variable_order, id) in variable_ids.iter().enumerate() {
+            let Some(variable) = target.variables.get(id) else {
+                continue;
+            };
+            let key = variable_key(target_index, id);
+            let monitor_visible = project.monitors.iter().any(|monitor| {
+                monitor.visible
+                    && monitor.id == *id
+                    && monitor_variable_target_index(project, monitor) == Some(target_index)
             });
-            if target.is_stage {
-                info.name = variable.name.clone();
-                info.target = target.name.clone();
-                info.is_stage = true;
-                info.target_index = project
-                    .targets
-                    .iter()
-                    .position(|candidate| candidate.is_stage)
-                    .unwrap_or(0);
-            }
+            entries.insert(
+                key,
+                VariableInfo {
+                    id: id.clone(),
+                    slot: 0,
+                    name: variable.name.clone(),
+                    target: target.name.clone(),
+                    is_stage: target.is_stage,
+                    target_index,
+                    target_variable_order,
+                    numeric: numeric_variables.contains(&variable_key(target_index, id)),
+                    non_nan: non_nan_variables.contains(&variable_key(target_index, id)),
+                    monitor_visible,
+                    index_read_override: None,
+                },
+            );
         }
     }
     let mut output = HashMap::new();
-    for (slot, (id, mut info)) in entries.into_iter().enumerate() {
+    for (slot, (key, mut info)) in entries.into_iter().enumerate() {
         info.slot = slot;
-        output.insert(id, info);
+        output.insert(key, info);
     }
     output
 }
 
+fn monitor_variable_target_index(
+    project: &ScratchProject,
+    monitor: &crate::parser::ScratchMonitor,
+) -> Option<usize> {
+    let target = monitor.sprite_name.as_deref().map_or_else(
+        || project.targets.iter().position(|target| target.is_stage),
+        |sprite_name| {
+            project
+                .targets
+                .iter()
+                .position(|target| target.name == sprite_name)
+        },
+    )?;
+    project.targets[target]
+        .variables
+        .contains_key(&monitor.id)
+        .then_some(target)
+}
+
 // prove numeric variables non-nan when every write preserves that property.
 pub(super) fn non_nan_variables(project: &ScratchProject) -> HashSet<String> {
-    let mut non_nan = project
-        .targets
-        .iter()
-        .flat_map(|target| &target.variables)
-        .filter(|(_, variable)| variable.value.as_f64().is_some_and(|value| !value.is_nan()))
-        .map(|(id, _)| id.clone())
-        .collect::<HashSet<_>>();
+    let mut non_nan = HashSet::new();
+    for (target_index, target) in project.targets.iter().enumerate() {
+        for (id, variable) in &target.variables {
+            if variable.value.as_f64().is_some_and(|value| !value.is_nan()) {
+                non_nan.insert(variable_key(target_index, id));
+            }
+        }
+    }
 
     loop {
         let previous = non_nan.clone();
@@ -140,7 +164,7 @@ pub(super) fn non_nan_variables(project: &ScratchProject) -> HashSet<String> {
                         .is_some_and(f64::is_finite)
                 };
                 if !preserves_non_nan {
-                    non_nan.remove(id);
+                    non_nan.remove(&variable_key_for_target(target, id));
                 }
             }
         }
@@ -161,7 +185,9 @@ pub(super) fn input_is_non_nan_number(
             .as_f64()
             .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
             .is_some_and(|value: f64| !value.is_nan()),
-        Some(InputValue::VariableReference(reference)) => non_nan.contains(reference.id),
+        Some(InputValue::VariableReference(reference)) => {
+            non_nan.contains(&variable_key_for_target(target, reference.id))
+        }
         Some(InputValue::BlockReference(id)) => {
             if !active.insert(id.to_owned()) {
                 return false;
@@ -174,7 +200,7 @@ pub(super) fn input_is_non_nan_number(
                         .and_then(|field| field.as_array())
                         .and_then(|field| field.get(1))
                         .and_then(|id| id.as_str())
-                        .is_some_and(|id| non_nan.contains(id));
+                        .is_some_and(|id| non_nan.contains(&variable_key_for_target(target, id)));
                 }
                 matches!(
                     block.opcode.as_str(),
@@ -204,13 +230,14 @@ pub(super) fn input_is_non_nan_number(
 
 // prove variables numeric only when their saved value and every assignment are numeric.
 pub(super) fn numeric_variables(project: &ScratchProject) -> HashSet<String> {
-    let mut numeric = project
-        .targets
-        .iter()
-        .flat_map(|target| &target.variables)
-        .filter(|(_, variable)| variable.value.is_number() && !variable.is_cloud)
-        .map(|(id, _)| id.clone())
-        .collect::<HashSet<_>>();
+    let mut numeric = HashSet::new();
+    for (target_index, target) in project.targets.iter().enumerate() {
+        for (id, variable) in &target.variables {
+            if variable.value.is_number() && !variable.is_cloud {
+                numeric.insert(variable_key(target_index, id));
+            }
+        }
+    }
 
     loop {
         let previous = numeric.clone();
@@ -234,7 +261,7 @@ pub(super) fn numeric_variables(project: &ScratchProject) -> HashSet<String> {
                     &previous,
                     &mut HashSet::new(),
                 ) {
-                    numeric.remove(id);
+                    numeric.remove(&variable_key_for_target(target, id));
                 }
             }
         }
@@ -252,7 +279,9 @@ pub(super) fn input_is_numeric(
 ) -> bool {
     match input.and_then(parse_input) {
         Some(InputValue::Number(_)) => true,
-        Some(InputValue::VariableReference(reference)) => numeric.contains(reference.id),
+        Some(InputValue::VariableReference(reference)) => {
+            numeric.contains(&variable_key_for_target(target, reference.id))
+        }
         Some(InputValue::BlockReference(id)) => {
             if !active.insert(id.to_owned()) {
                 return false;
@@ -270,7 +299,7 @@ pub(super) fn input_is_numeric(
                         .and_then(|field| field.as_array())
                         .and_then(|field| field.get(1))
                         .and_then(|id| id.as_str())
-                        .is_some_and(|id| numeric.contains(id)),
+                        .is_some_and(|id| numeric.contains(&variable_key_for_target(target, id))),
                     "math_number"
                     | "math_integer"
                     | "math_whole_number"
@@ -339,6 +368,160 @@ pub(super) fn allocate_lists(project: &ScratchProject) -> HashMap<String, ListIn
         output.insert(id, info);
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::parse_project;
+    use serde_json::json;
+
+    #[test]
+    fn same_variable_id_on_two_sprites_keeps_target_values_and_monitors_separate() {
+        let project = parse_project(
+            &json!({
+                "targets": [
+                    {"name": "Stage", "isStage": true, "variables": {}, "blocks": {}},
+                    {
+                        "name": "SpriteA",
+                        "isStage": false,
+                        "variables": {"shared-id": ["Render Distance", 16]},
+                        "blocks": {
+                            "reporter_a": {
+                                "opcode": "data_variable",
+                                "fields": {"VARIABLE": ["Render Distance", "shared-id"]}
+                            }
+                        }
+                    },
+                    {
+                        "name": "SpriteB",
+                        "isStage": false,
+                        "variables": {"shared-id": ["Render Distance", 5]},
+                        "blocks": {
+                            "reporter_b": {
+                                "opcode": "data_variable",
+                                "fields": {"VARIABLE": ["Render Distance", "shared-id"]}
+                            }
+                        }
+                    }
+                ],
+                "monitors": [
+                    {
+                        "id": "shared-id",
+                        "opcode": "data_variable",
+                        "params": {"VARIABLE": "Render Distance"},
+                        "spriteName": "SpriteA",
+                        "visible": true
+                    },
+                    {
+                        "id": "shared-id",
+                        "opcode": "data_variable",
+                        "params": {"VARIABLE": "Render Distance"},
+                        "spriteName": "SpriteB",
+                        "visible": false
+                    }
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let variables = allocate_variables(&project);
+        let sprite_a = variable_for_target(&project.targets[1], "shared-id", &variables).unwrap();
+        let sprite_b = variable_for_target(&project.targets[2], "shared-id", &variables).unwrap();
+        assert_ne!(sprite_a.slot, sprite_b.slot);
+        assert!(sprite_a.monitor_visible);
+        assert!(!sprite_b.monitor_visible);
+
+        for (target_index, expected_slot) in [(1, sprite_a.slot), (2, sprite_b.slot)] {
+            let block = project.targets[target_index]
+                .blocks
+                .values()
+                .next()
+                .unwrap();
+            assert_eq!(
+                crate::rust::statements::variable_field(block, "VARIABLE", &variables)
+                    .unwrap()
+                    .slot,
+                expected_slot
+            );
+        }
+
+        let generated = super::super::generate(&project);
+        assert!(generated.contains("(16.0_f64).into(), (5.0_f64).into()"));
+        assert!(generated.contains(
+            "ScratchVariableMetadata::for_target(\"shared-id\", \"Render Distance\", \"SpriteA\", 1, false).with_monitor_visible(true)"
+        ));
+        assert!(generated.contains(
+            "ScratchVariableMetadata::for_target(\"shared-id\", \"Render Distance\", \"SpriteB\", 2, false).with_monitor_visible(false)"
+        ));
+    }
+
+    #[test]
+    fn sensing_of_uses_saved_order_for_duplicate_variable_names_on_a_target() {
+        let project = parse_project(
+            r#"{
+                "targets": [
+                    {"name":"Stage","isStage":true,"variables":{},"blocks":{}},
+                    {"name":"Engine","isStage":false,"variables":{
+                        "z-first":["Render Distance",5],
+                        "a-second":["Render Distance",0]
+                    },"blocks":{}},
+                    {"name":"Renderer","isStage":false,"variables":{},"blocks":{
+                        "flag":{"opcode":"event_whenflagclicked","next":"say","topLevel":true,"inputs":{},"fields":{}},
+                        "say":{"opcode":"looks_say","parent":"flag","inputs":{"MESSAGE":[3,"sense"]},"fields":{}},
+                        "sense":{"opcode":"sensing_of","parent":"say","inputs":{"OBJECT":[1,"object"]},"fields":{"PROPERTY":["Render Distance",null]}},
+                        "object":{"opcode":"sensing_of_object_menu","parent":"sense","inputs":{},"fields":{"OBJECT":["Engine",null]}}
+                    }}
+                ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            project.targets[1].variable_order,
+            vec!["z-first".to_owned(), "a-second".to_owned()]
+        );
+
+        let generated = super::super::generate(&project);
+        assert!(
+            generated.contains("state.sensing_of_target_slot(1, \"Render Distance\", Some(1))")
+        );
+    }
+
+    #[test]
+    fn minecraft_vcbt_render_distance_lookup_uses_the_first_engine_definition() {
+        let input = concat!(env!("CARGO_MANIFEST_DIR"), "/programs/minecraft-vcbt.sb3");
+        let json = crate::extractor::read_project_json(input).unwrap();
+        let project = parse_project(&json).unwrap();
+        let engine = project
+            .targets
+            .iter()
+            .find(|target| target.name == "Engine")
+            .unwrap();
+        let ordered_ids = engine
+            .variable_order
+            .iter()
+            .filter(|id| {
+                engine
+                    .variables
+                    .get(*id)
+                    .is_some_and(|variable| variable.name == "Render Distance")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(ordered_ids[0], "w33SmpN4$*A-T6i%kR*^");
+        assert_eq!(ordered_ids[1], "(x+o5V%u%|Ec7a#?o3vu");
+
+        let variables = allocate_variables(&project);
+        let first = variable_for_target(engine, &ordered_ids[0], &variables).unwrap();
+        let second = variable_for_target(engine, &ordered_ids[1], &variables).unwrap();
+        assert!(first.target_variable_order < second.target_variable_order);
+
+        let generated = super::super::generate(&project);
+        assert!(generated.contains(&format!(
+            "state.sensing_of_target_slot(2, \"Render Distance\", Some({}))",
+            first.slot
+        )));
+    }
 }
 
 // convert a Scratch variable name into a valid Rust identifier.

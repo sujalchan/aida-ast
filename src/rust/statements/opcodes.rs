@@ -1164,9 +1164,10 @@ pub(super) fn variable_input(
     arguments: &HashMap<String, String>,
 ) -> Option<String> {
     match input.and_then(parse_input)? {
-        InputValue::VariableReference(reference) => variables
-            .get(reference.id)
-            .map(VariableInfo::read_expression),
+        InputValue::VariableReference(reference) => {
+            super::super::project::variable_for_target(target, reference.id, variables)
+                .map(VariableInfo::read_expression)
+        }
         InputValue::BlockReference(id) => {
             let reporter = target.blocks.get(id)?;
             if reporter.opcode == "data_variable" {
@@ -1205,7 +1206,9 @@ pub(super) fn variable_input_info(
     variables: &HashMap<String, VariableInfo>,
 ) -> Option<VariableInfo> {
     match input.and_then(parse_input)? {
-        InputValue::VariableReference(reference) => variables.get(reference.id).cloned(),
+        InputValue::VariableReference(reference) => {
+            super::super::project::variable_for_target(target, reference.id, variables).cloned()
+        }
         InputValue::BlockReference(id) => {
             let reporter = target.blocks.get(id)?;
             (reporter.opcode == "data_variable")
@@ -1312,7 +1315,12 @@ pub(in crate::rust) fn variable_field(
     variables: &HashMap<String, VariableInfo>,
 ) -> Option<VariableInfo> {
     let data = block.fields.get(field)?.as_array()?;
-    variables.get(data.get(1)?.as_str()?).cloned()
+    super::super::project::variable_for_target_index(
+        block.target_index,
+        data.get(1)?.as_str()?,
+        variables,
+    )
+    .cloned()
 }
 
 // get the original Scratch variable name displayed by a say reporter.

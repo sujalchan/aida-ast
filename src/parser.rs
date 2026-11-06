@@ -53,55 +53,146 @@ pub struct ScratchMonitor {
     pub slider_max: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct ScratchTarget {
     pub name: String,
-    #[serde(rename = "isStage")]
     pub is_stage: bool,
-    #[serde(default, rename = "layerOrder")]
+    pub target_index: usize,
     pub layer_order: u32,
-    #[serde(default)]
     pub x: f64,
-    #[serde(default)]
     pub y: f64,
-    #[serde(default = "default_direction")]
     pub direction: f64,
-    #[serde(default = "default_size")]
     pub size: f64,
-    #[serde(default = "default_visible")]
     pub visible: bool,
     // preserve each target's startup rotation style for renderer initialization.
-    #[serde(default = "default_rotation_style", rename = "rotationStyle")]
     pub rotation_style: String,
-    #[serde(default = "default_volume")]
     pub volume: f64,
     // retain target drag metadata for Scratch-compatible pointer event timing.
-    #[serde(default)]
     pub draggable: bool,
-
-    #[serde(default, deserialize_with = "deserialize_blocks")]
     pub blocks: HashMap<String, ScratchBlock>,
-
-    #[serde(default)]
     pub variables: HashMap<String, ScratchVariable>,
-
-    #[serde(default)]
+    /// Variable IDs in their saved project order, used when a Scratch reporter
+    /// resolves a variable by name rather than by ID.
+    pub variable_order: Vec<String>,
     pub lists: HashMap<String, ScratchList>,
-
-    #[serde(default)]
     pub costumes: Vec<ScratchAsset>,
-    #[serde(default)]
     pub sounds: Vec<ScratchAsset>,
-    #[serde(default, rename = "currentCostume")]
     pub current_costume: usize,
-
-    #[serde(default)]
     pub broadcasts: HashMap<String, String>,
 
     // Shared compile-time project identities let reporters resolve static target
     // menus without adding target-name searches to their runtime hot path.
-    #[serde(skip)]
     pub target_identities: Arc<Vec<(String, usize, bool)>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScratchTargetData {
+    name: String,
+    #[serde(rename = "isStage")]
+    is_stage: bool,
+    #[serde(default, rename = "layerOrder")]
+    layer_order: u32,
+    #[serde(default)]
+    x: f64,
+    #[serde(default)]
+    y: f64,
+    #[serde(default = "default_direction")]
+    direction: f64,
+    #[serde(default = "default_size")]
+    size: f64,
+    #[serde(default = "default_visible")]
+    visible: bool,
+    #[serde(default = "default_rotation_style", rename = "rotationStyle")]
+    rotation_style: String,
+    #[serde(default = "default_volume")]
+    volume: f64,
+    #[serde(default)]
+    draggable: bool,
+    #[serde(default, deserialize_with = "deserialize_blocks")]
+    blocks: HashMap<String, ScratchBlock>,
+    #[serde(default)]
+    variables: OrderedVariables,
+    #[serde(default)]
+    lists: HashMap<String, ScratchList>,
+    #[serde(default)]
+    costumes: Vec<ScratchAsset>,
+    #[serde(default)]
+    sounds: Vec<ScratchAsset>,
+    #[serde(default, rename = "currentCostume")]
+    current_costume: usize,
+    #[serde(default)]
+    broadcasts: HashMap<String, String>,
+}
+
+#[derive(Debug, Default)]
+struct OrderedVariables {
+    values: HashMap<String, ScratchVariable>,
+    order: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for OrderedVariables {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct OrderedVariablesVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for OrderedVariablesVisitor {
+            type Value = OrderedVariables;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a map of Scratch variable IDs to definitions")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut variables = OrderedVariables::default();
+                while let Some((id, variable)) = map.next_entry::<String, ScratchVariable>()? {
+                    if !variables.values.contains_key(&id) {
+                        variables.order.push(id.clone());
+                    }
+                    variables.values.insert(id, variable);
+                }
+                Ok(variables)
+            }
+        }
+
+        deserializer.deserialize_map(OrderedVariablesVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for ScratchTarget {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let target = ScratchTargetData::deserialize(deserializer)?;
+        Ok(Self {
+            name: target.name,
+            is_stage: target.is_stage,
+            target_index: 0,
+            layer_order: target.layer_order,
+            x: target.x,
+            y: target.y,
+            direction: target.direction,
+            size: target.size,
+            visible: target.visible,
+            rotation_style: target.rotation_style,
+            volume: target.volume,
+            draggable: target.draggable,
+            blocks: target.blocks,
+            variables: target.variables.values,
+            variable_order: target.variables.order,
+            lists: target.lists,
+            costumes: target.costumes,
+            sounds: target.sounds,
+            current_costume: target.current_costume,
+            broadcasts: target.broadcasts,
+            target_identities: Arc::new(Vec::new()),
+        })
+    }
 }
 
 fn default_direction() -> f64 {
@@ -209,6 +300,9 @@ impl From<ScratchVariableData> for ScratchVariable {
 #[derive(Debug, Default, Deserialize)]
 pub struct ScratchBlock {
     pub opcode: String,
+
+    #[serde(skip)]
+    pub target_index: usize,
 
     pub next: Option<String>,
     pub parent: Option<String>,
@@ -344,8 +438,12 @@ pub fn parse_project(json_str: &str) -> Result<ScratchProject, serde_json::Error
         .find(|target| target.is_stage)
         .map(|stage| stage.broadcasts.clone())
         .unwrap_or_default();
-    for target in &mut project.targets {
+    for (target_index, target) in project.targets.iter_mut().enumerate() {
+        target.target_index = target_index;
         target.target_identities = Arc::clone(&target_identities);
+        for block in target.blocks.values_mut() {
+            block.target_index = target_index;
+        }
         for (id, name) in &broadcasts {
             target
                 .broadcasts

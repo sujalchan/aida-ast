@@ -269,7 +269,9 @@ pub(super) fn collect_unsafe_numeric_reads(
 ) {
     match input.and_then(parse_input) {
         Some(InputValue::VariableReference(reference)) => {
-            if let Some(variable) = variables.get(reference.id) {
+            if let Some(variable) =
+                super::super::project::variable_for_target(target, reference.id, variables)
+            {
                 reads.insert(variable.slot, variable.clone());
                 if !numeric_context {
                     unsafe_slots.insert(variable.slot);
@@ -600,7 +602,9 @@ pub(super) fn collect_input_slots(
 ) {
     match input.and_then(parse_input) {
         Some(InputValue::VariableReference(reference)) => {
-            if let Some(variable) = variables.get(reference.id) {
+            if let Some(variable) =
+                super::super::project::variable_for_target(target, reference.id, variables)
+            {
                 slots.insert(variable.slot);
             }
         }

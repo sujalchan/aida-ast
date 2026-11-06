@@ -31,15 +31,62 @@ const EXTERNAL_LIST_DATA_THRESHOLD: usize = 32 * 1024;
 
 #[derive(Clone)]
 pub(super) struct VariableInfo {
+    // original Scratch ID; map keys use target-scoped identities instead.
+    pub(super) id: String,
     pub(super) slot: usize,
     pub(super) name: String,
     pub(super) target: String,
     pub(super) is_stage: bool,
     pub(super) target_index: usize,
+    pub(super) target_variable_order: usize,
     pub(super) numeric: bool,
     pub(super) non_nan: bool,
     pub(super) monitor_visible: bool,
     pub(super) index_read_override: Option<String>,
+}
+
+pub(super) fn variable_key(target_index: usize, id: &str) -> String {
+    format!("{id}\u{1f}{target_index}")
+}
+
+pub(super) fn variable_for_target<'a>(
+    target: &ScratchTarget,
+    id: &str,
+    variables: &'a HashMap<String, VariableInfo>,
+) -> Option<&'a VariableInfo> {
+    variable_for_target_index(target.target_index, id, variables)
+}
+
+pub(super) fn variable_for_target_index<'a>(
+    target_index: usize,
+    id: &str,
+    variables: &'a HashMap<String, VariableInfo>,
+) -> Option<&'a VariableInfo> {
+    variables
+        .get(&variable_key(target_index, id))
+        .or_else(|| {
+            variables
+                .values()
+                .find(|variable| variable.target_index == target_index && variable.id == id)
+        })
+        .or_else(|| {
+            variables
+                .values()
+                .find(|variable| variable.is_stage && variable.id == id)
+        })
+}
+
+pub(super) fn variable_key_for_target(target: &ScratchTarget, id: &str) -> String {
+    if target.variables.contains_key(id) {
+        return variable_key(target.target_index, id);
+    }
+    let stage_index = target
+        .target_identities
+        .iter()
+        .find(|(_, _, is_stage)| *is_stage)
+        .map(|(_, target_index, _)| *target_index)
+        .unwrap_or(target.target_index);
+    variable_key(stage_index, id)
 }
 
 impl VariableInfo {
@@ -232,31 +279,21 @@ fn generate_internal(
 
     let mut initial_values = vec![String::new(); variables.len()];
     let mut variable_metadata = vec![String::new(); variables.len()];
-    for (id, info) in &variables {
+    for info in variables.values() {
         let variable = project
             .targets
-            .iter()
-            .find(|target| target.name == info.target && target.is_stage == info.is_stage)
-            .and_then(|target| target.variables.get(id))
-            .or_else(|| {
-                project
-                    .targets
-                    .iter()
-                    .find_map(|target| target.variables.get(id))
-            })
+            .get(info.target_index)
+            .and_then(|target| target.variables.get(&info.id))
             .expect("every allocated variable has an initializer");
         initial_values[info.slot] = format!("({}).into()", literal(&variable.value));
         variable_metadata[info.slot] = format!(
             "ScratchVariableMetadata::for_target({}, {}, {}, {}, {}).with_monitor_visible({})",
-            quote(id),
+            quote(&info.id),
             quote(&info.name),
             quote(&info.target),
             info.target_index,
             info.is_stage,
-            project
-                .monitors
-                .iter()
-                .any(|monitor| monitor.visible && monitor.id == *id)
+            info.monitor_visible
         );
     }
     let mut serialized_lists = vec![String::new(); lists.len()];

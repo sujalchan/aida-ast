@@ -9,13 +9,14 @@ pub(in crate::rust) fn collect_numeric_local_slots(
 ) -> bool {
     match input.and_then(parse_input) {
         Some(InputValue::Number(_) | InputValue::String(_)) => true,
-        Some(InputValue::VariableReference(reference)) => variables
-            .get(reference.id)
-            .filter(|variable| variable.numeric)
-            .is_some_and(|variable| {
-                slots.insert(variable.slot);
-                true
-            }),
+        Some(InputValue::VariableReference(reference)) => {
+            super::super::project::variable_for_target(target, reference.id, variables)
+                .filter(|variable| variable.numeric)
+                .is_some_and(|variable| {
+                    slots.insert(variable.slot);
+                    true
+                })
+        }
         Some(InputValue::BlockReference(id)) => {
             if !active.insert(id.to_owned()) {
                 return false;
@@ -84,7 +85,8 @@ pub(in crate::rust) fn local_expression(
             kind: LocalValueKind::Text,
         }),
         InputValue::VariableReference(reference) => {
-            let variable = variables.get(reference.id)?;
+            let variable =
+                super::super::project::variable_for_target(target, reference.id, variables)?;
             Some(LocalExpression {
                 code: locals.get(&variable.slot)?.clone(),
                 kind: LocalValueKind::Number,
@@ -378,9 +380,10 @@ pub(super) fn local_input_is_non_nan_number(
             .as_f64()
             .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
             .is_some_and(|value: f64| !value.is_nan()),
-        Some(InputValue::VariableReference(reference)) => variables
-            .get(reference.id)
-            .is_some_and(|variable| variable.non_nan),
+        Some(InputValue::VariableReference(reference)) => {
+            super::super::project::variable_for_target(target, reference.id, variables)
+                .is_some_and(|variable| variable.non_nan)
+        }
         Some(InputValue::BlockReference(id)) => {
             if !active.insert(id.to_owned()) {
                 return false;
