@@ -12,11 +12,11 @@ The opcode audit used Scratch Blocks `develop` at [`95817145`](https://github.co
 
 | Fully implemented | Partially implemented | Not implemented |
 |---:|---:|---:|
-| **121** | **1** | **12** |
+| **121** | **0** | **13** |
 
 These totals count only the current Scratch runtime opcode section below. Editor and serialized-input helpers and legacy compatibility opcodes are listed separately.
 
-**Generated counts:** current runtime: 134 (121 implemented, 1 partial, 12 unsupported); editor and serialized helpers: 30; legacy no-ops: 9; legacy executable: 12; total classified identifiers: 185.
+**Generated counts:** current runtime: 134 (121 implemented, 0 partial, 13 unsupported); editor and serialized helpers: 30; legacy no-ops: 9; legacy executable: 12; total classified identifiers: 185.
 
 The totals summarize the inventory sections below.
 
