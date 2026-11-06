@@ -73,6 +73,10 @@ pub(super) fn allocate_variables(project: &ScratchProject) -> HashMap<String, Va
                     .unwrap_or(0),
                 numeric: numeric_variables.contains(id),
                 non_nan: non_nan_variables.contains(id),
+                monitor_visible: project
+                    .monitors
+                    .iter()
+                    .any(|monitor| monitor.visible && monitor.id == *id),
                 index_read_override: None,
             });
             if target.is_stage {

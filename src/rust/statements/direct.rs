@@ -4,6 +4,8 @@ pub(in crate::rust) struct DirectProcedureOptions {
     pub(in crate::rust) target_index: usize,
     pub(in crate::rust) fast_math: bool,
     pub(in crate::rust) no_warp_timer: bool,
+    pub(in crate::rust) reachable_procedure_ids: HashSet<String>,
+    pub(in crate::rust) numeric_call_procedure_ids: HashSet<String>,
 }
 
 pub(super) fn direct_eligible(target: &ScratchTarget, procedure: &ProcedureSignature) -> bool {
@@ -169,8 +171,13 @@ pub(in crate::rust) fn generate_direct_procedures(
         target_index,
         fast_math,
         no_warp_timer,
+        reachable_procedure_ids,
+        numeric_call_procedure_ids,
     } = options;
-    for procedure in procedures.iter().filter(|p| direct_eligible(target, p)) {
+    for procedure in procedures.iter().filter(|procedure| {
+        reachable_procedure_ids.contains(&procedure.definition_id)
+            && direct_eligible(target, procedure)
+    }) {
         let arguments = procedure
             .argument_names
             .iter()
@@ -212,23 +219,26 @@ pub(in crate::rust) fn generate_direct_procedures(
         line(output, 0, "}\n");
         if let Some(numeric) = numeric {
             output.push_str(&numeric);
-            output.push_str(
-                &super::super::direct_numeric::generate_numeric_direct(
-                    target,
-                    procedure,
-                    variables,
-                    lists,
-                    &direct_name(target_index, procedure.frame_id),
-                    true,
-                )
-                .unwrap(),
-            );
+            if numeric_call_procedure_ids.contains(&procedure.definition_id) {
+                output.push_str(
+                    &super::super::direct_numeric::generate_numeric_direct(
+                        target,
+                        procedure,
+                        variables,
+                        lists,
+                        &direct_name(target_index, procedure.frame_id),
+                        true,
+                    )
+                    .unwrap(),
+                );
+            }
         }
     }
     if no_warp_timer {
         let eligibility = direct_warp_eligibility(target, procedures);
         for procedure in procedures.iter().filter(|procedure| {
-            eligibility
+            reachable_procedure_ids.contains(&procedure.definition_id)
+                && eligibility
                 .get(&procedure.definition_id)
                 .copied()
                 .unwrap_or(false)

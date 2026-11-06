@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn folds_finite_literal_arithmetic_at_compile_time() {
+    let project = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Sprite1",
+                "isStage": false,
+                "variables": {"result_id": ["result", 0]},
+                "blocks": {
+                    "hat": {"opcode":"event_whenflagclicked", "next":"set", "topLevel":true, "inputs":{}, "fields":{}},
+                    "set": {"opcode":"data_setvariableto", "next":null, "parent":"hat", "inputs":{"VALUE":[3,"sum",[4,"0"]]}, "fields":{"VARIABLE":["result","result_id"]}},
+                    "sum": {"opcode":"operator_add", "parent":"set", "inputs":{"NUM1":[3,"product",[4,"0"]], "NUM2":[1,[4,"1.25"]]}, "fields":{}},
+                    "product": {"opcode":"operator_multiply", "parent":"sum", "inputs":{"NUM1":[1,[4,"2"]], "NUM2":[1,[4,"3"]]}, "fields":{}}
+                }
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = generate(&project);
+    assert!(output.contains("state.set_local_number(0, 7.25_f64);"));
+    assert!(!output.contains("scratch_add("));
+    assert!(!output.contains("scratch_multiply("));
+}
+
+#[test]
 fn lowers_dynamic_math_with_scratch_conversion_and_keeps_literal_types() {
     let project = parse_project(
         &json!({
@@ -102,6 +128,32 @@ fn numeric_loops_use_native_locals_and_commit_before_safeguard_yields() {
         .unwrap()
         + commit;
     assert!(safeguard < commit && commit < yielded);
+}
+
+#[test]
+fn monitored_loop_variables_do_not_emit_an_unreachable_deferred_write_path() {
+    let project = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Stage",
+                "isStage": true,
+                "variables": {"count_id": ["count", 0]},
+                "blocks": {
+                    "hat": {"opcode":"event_whenflagclicked", "next":"repeat", "topLevel":true, "inputs":{}, "fields":{}},
+                    "repeat": {"opcode":"control_repeat", "next":null, "parent":"hat", "inputs":{"TIMES":[1,[4,"100"]], "SUBSTACK":[2,"change"]}, "fields":{}},
+                    "change": {"opcode":"data_changevariableby", "next":null, "parent":"repeat", "inputs":{"VALUE":[1,[4,"1"]]}, "fields":{"VARIABLE":["count","count_id"]}}
+                }
+            }],
+            "monitors": [{"id":"count_id", "mode":"default", "opcode":"data_variable", "params":{"VARIABLE":"count"}, "visible":true}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = generate(&project);
+    assert!(output.contains("with_monitor_visible(true)"));
+    assert!(!output.contains("state.can_defer_variable_writes"));
+    assert!(output.contains("state.change_shared_number(0, scratch_to_number(1.0_f64));"));
 }
 
 #[test]

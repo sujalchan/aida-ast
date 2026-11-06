@@ -12,8 +12,7 @@ fn clone_fixture_lowers_clone_creation_and_clone_start_hats() {
 
     assert!(output.contains("state.create_clone(source, target, 300);"));
     assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
-    assert!(output.contains("new_clone_start_script_sprite1_2(_instance)"));
-    assert!(output.contains("new_clone_start_script_sprite1_5(_instance)"));
+    assert!(output.contains("new_clone_start_script_sprite1_"));
     assert!(output.contains("take_pending_clones"));
     assert!(output.contains("remove_target_scripts"));
     assert!(output.contains("ScratchVariableMetadata::for_target(\"`jEk@4|i[#Fk?(8x)AV.-my variable\", \"my variable\", \"Stage\", 0, true)"));

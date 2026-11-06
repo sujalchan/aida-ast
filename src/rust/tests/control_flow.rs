@@ -101,7 +101,7 @@ fn stop_other_scripts_in_sprite_keeps_the_current_script_continuation() {
     let output = generate(&project);
 
     assert!(output.contains("return ScriptStatus::StopOtherScripts;"));
-    assert!(output.contains("pc = 1;"));
+    assert!(output.contains("__aida_set_pc!(script, 1);"));
     assert!(!output.contains("unsupported statement: control_stop"));
 }
 
@@ -116,6 +116,67 @@ fn if_else_fixture_lowers_conditional_branches() {
     assert!(output.contains("} else {"));
     assert!(!output.contains("unsupported statement: control_if"));
     assert!(!output.contains("unsupported statement: control_if_else"));
+}
+
+#[test]
+fn synchronous_conditional_branches_keep_valid_dispatch_states() {
+    let project = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Sprite1",
+                "isStage": false,
+                "variables": {"flag": ["flag", 0], "value": ["value", 0]},
+                "blocks": {
+                    "hat": {"opcode": "event_whenflagclicked", "next": "choose", "topLevel": true, "inputs": {}, "fields": {}},
+                    "choose": {"opcode": "control_if_else", "parent": "hat", "next": "finish", "inputs": {"CONDITION": [2, "flag_value"], "SUBSTACK": [2, "set_yes"], "SUBSTACK2": [2, "set_no"]}, "fields": {}},
+                    "flag_value": {"opcode": "data_variable", "parent": "choose", "inputs": {}, "fields": {"VARIABLE": ["flag", "flag"]}},
+                    "set_yes": {"opcode": "data_setvariableto", "parent": "choose", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["value", "value"]}},
+                    "set_no": {"opcode": "data_setvariableto", "parent": "choose", "inputs": {"VALUE": [1, [4, "2"]]}, "fields": {"VARIABLE": ["value", "value"]}},
+                    "finish": {"opcode": "data_changevariableby", "parent": "choose", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["value", "value"]}}
+                }
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = generate(&project);
+
+    assert!(output.contains("if scratch_bool(state.get("));
+    assert!(output.contains("state.set_local_number("));
+    assert_eq!(count_resumable_pc_arms(&output), 4);
+}
+
+#[test]
+fn loop_body_keeps_states_needed_after_a_warp_call_yields() {
+    let project = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Sprite1",
+                "isStage": false,
+                "variables": {"count": ["count", 0]},
+                "blocks": {
+                    "hat": {"opcode": "event_whenflagclicked", "next": "call_caller", "topLevel": true, "inputs": {}, "fields": {}},
+                    "call_caller": {"opcode": "procedures_call", "parent": "hat", "inputs": {}, "fields": {}, "mutation": {"proccode": "caller", "argumentids": "[]", "warp": "false"}},
+                    "caller_definition": {"opcode": "procedures_definition", "next": "repeat", "topLevel": true, "inputs": {"custom_block": [1, "caller_prototype"]}, "fields": {}},
+                    "caller_prototype": {"opcode": "procedures_prototype", "parent": "caller_definition", "inputs": {}, "fields": {}, "mutation": {"proccode": "caller", "argumentnames": "[]", "argumentids": "[]", "argumentdefaults": "[]", "warp": "true"}},
+                    "repeat": {"opcode": "control_repeat", "parent": "caller_definition", "inputs": {"TIMES": [1, [4, "2"]], "SUBSTACK": [2, "call_helper"]}, "fields": {}},
+                    "call_helper": {"opcode": "procedures_call", "parent": "repeat", "next": "increment", "inputs": {}, "fields": {}, "mutation": {"proccode": "helper", "argumentids": "[]", "warp": "false"}},
+                    "increment": {"opcode": "data_changevariableby", "parent": "call_helper", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["count", "count"]}},
+                    "helper_definition": {"opcode": "procedures_definition", "next": "helper_increment", "topLevel": true, "inputs": {"custom_block": [1, "helper_prototype"]}, "fields": {}},
+                    "helper_prototype": {"opcode": "procedures_prototype", "parent": "helper_definition", "inputs": {}, "fields": {}, "mutation": {"proccode": "helper", "argumentnames": "[]", "argumentids": "[]", "argumentdefaults": "[]", "warp": "false"}},
+                    "helper_increment": {"opcode": "data_changevariableby", "parent": "helper_definition", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["count", "count"]}}
+                }
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = generate(&project);
+
+    assert!(output.contains("fn direct_procedure_"));
+    assert!(output.contains("script.frames.push(ProcedureFrame::new("));
+    assert!(output.contains("repeat_counts["));
+    assert!(count_resumable_pc_arms(&output) >= 4);
 }
 
 #[test]
@@ -141,8 +202,12 @@ fn straight_line_blocks_share_one_resumable_dispatch_arm() {
     // straight-line numeric assignments avoid temporary scratch values.
     assert!(output.contains("state.set_local_number(0, 1.0_f64);"));
     assert!(output.contains("state.set_local_number(1, 2.0_f64);"));
-    assert!(!output.contains("script.frames.last_mut().unwrap().pc = 1;"));
-    assert!(output.contains("script.frames.last_mut().unwrap().pc = usize::MAX;"));
+    assert!(!output.contains("__aida_set_pc!(script, 1);"));
+    assert!(output.contains("__aida_continue_at!(script, usize::MAX);"));
+    assert!(output.contains("fn frame(&self) -> &ProcedureFrame"));
+    assert!(output.contains("fn frame_mut(&mut self) -> &mut ProcedureFrame"));
+    assert!(!output.contains("script.frames.last().unwrap()"));
+    assert!(!output.contains("script.frames.last_mut().unwrap()"));
 }
 
 #[test]
@@ -220,14 +285,14 @@ fn lowers_nested_repeat_until_and_forever_with_resumable_loop_state() {
 
     let output = generate(&project);
     assert!(output.contains("vec![0; 2]"));
-    assert!(output.contains("script.frames.last_mut().unwrap().repeat_counts[0] = repeat_count;"));
-    assert!(output.contains("script.frames.last_mut().unwrap().repeat_counts[1] = repeat_count;"));
+    assert!(output.contains("script.frame_mut().repeat_counts[0] = repeat_count;"));
+    assert!(output.contains("script.frame_mut().repeat_counts[1] = repeat_count;"));
     assert_eq!(
         output.matches("let repeat_count = scratch_round").count(),
         2
     );
     assert!(output.contains("if !(scratch_bool(state.get(1)))"));
-    assert!(output.contains("script.frames.last_mut().unwrap().pc = 8;"));
+    assert!(output.contains("__aida_continue_at!(script, 8);"));
     assert!(output.contains("return ScriptStatus::Yield;"));
 }
 
@@ -239,12 +304,12 @@ fn structured_loop_merges_nested_numeric_branches_and_commits_before_yield() {
                 "variables": {"counter": ["counter", "0"], "flag": ["flag", "0"], "copy": ["copy", ""]},
                 "blocks": {
                     "hat": {"opcode": "event_whenflagclicked", "next": "repeat", "topLevel": true, "inputs": {}, "fields": {}},
-                    "repeat": {"opcode": "control_repeat", "inputs": {"TIMES": [1, [4, "3"]], "SUBSTACK": [2, "if"]}, "fields": {}},
-                    "if": {"opcode": "control_if_else", "next": "change", "inputs": {"CONDITION": [2, "equal"], "SUBSTACK": [2, "yes"], "SUBSTACK2": [2, "no"]}, "fields": {}},
-                    "equal": {"opcode": "operator_equals", "inputs": {"OPERAND1": [3, [12, "flag", "flag"], [4, "0"]], "OPERAND2": [1, [4, "0"]]}, "fields": {}},
-                    "yes": {"opcode": "data_setvariableto", "inputs": {"VALUE": [1, [10, "1"]]}, "fields": {"VARIABLE": ["flag", "flag"]}},
-                    "no": {"opcode": "data_setvariableto", "inputs": {"VALUE": [1, [10, "0"]]}, "fields": {"VARIABLE": ["flag", "flag"]}},
-                    "change": {"opcode": "data_changevariableby", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["counter", "counter"]}}
+                    "repeat": {"opcode": "control_repeat", "parent": "hat", "inputs": {"TIMES": [1, [4, "3"]], "SUBSTACK": [2, "if"]}, "fields": {}},
+                    "if": {"opcode": "control_if_else", "parent": "repeat", "next": "change", "inputs": {"CONDITION": [2, "equal"], "SUBSTACK": [2, "yes"], "SUBSTACK2": [2, "no"]}, "fields": {}},
+                    "equal": {"opcode": "operator_equals", "parent": "if", "inputs": {"OPERAND1": [3, [12, "flag", "flag"], [4, "0"]], "OPERAND2": [1, [4, "0"]]}, "fields": {}},
+                    "yes": {"opcode": "data_setvariableto", "parent": "if", "inputs": {"VALUE": [1, [10, "1"]]}, "fields": {"VARIABLE": ["flag", "flag"]}},
+                    "no": {"opcode": "data_setvariableto", "parent": "if", "inputs": {"VALUE": [1, [10, "0"]]}, "fields": {"VARIABLE": ["flag", "flag"]}},
+                    "change": {"opcode": "data_changevariableby", "parent": "repeat", "inputs": {"VALUE": [1, [4, "1"]]}, "fields": {"VARIABLE": ["counter", "counter"]}}
                 }
             }]
         }).to_string()).unwrap();
@@ -270,4 +335,19 @@ fn structured_loop_merges_nested_numeric_branches_and_commits_before_yield() {
         output.contains("state.change_local_number(1, scratch_change);"),
         "dynamic fallback must remain"
     );
+    assert_eq!(count_resumable_pc_arms(&output), 2);
+}
+
+fn count_resumable_pc_arms(source: &str) -> usize {
+    source
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            let indentation = line.len() - trimmed.len();
+            indentation >= 16
+                && trimmed
+                    .split_once(" => {")
+                    .is_some_and(|(pc, _)| pc.parse::<usize>().is_ok())
+        })
+        .count()
 }

@@ -51,4 +51,7 @@ use structured::*;
 
 pub(super) use direct::{DirectProcedureOptions, generate_direct_procedures};
 pub(super) use opcodes::variable_field;
-pub(super) use resumable::{ResumableScriptOptions, generate_resumable_script};
+pub(super) use resumable::{
+    ResumableScriptOptions, generate_resumable_procedure_step, generate_resumable_script,
+    prepare_resumable_procedures,
+};

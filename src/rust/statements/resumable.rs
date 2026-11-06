@@ -15,9 +15,277 @@ struct ScriptBlockChainContext<'a> {
 
 pub(in crate::rust) struct ResumableScriptOptions<'a> {
     pub(in crate::rust) function_name: &'a str,
-    pub(in crate::rust) target_index: usize,
     pub(in crate::rust) fast_math: bool,
     pub(in crate::rust) no_warp_timer: bool,
+}
+
+pub(in crate::rust) struct ResumableProcedurePlan {
+    target_index: usize,
+    graphs: Vec<(ProcedureSignature, ScriptGraph)>,
+    entries: HashMap<String, ProcedureEntry>,
+    reachable: HashSet<String>,
+    numeric_call_procedures: HashSet<String>,
+}
+
+impl ResumableProcedurePlan {
+    pub(in crate::rust) fn has_resumable_procedures(&self) -> bool {
+        !self.graphs.is_empty()
+    }
+
+    pub(in crate::rust) fn reachable_ids(&self) -> &HashSet<String> {
+        &self.reachable
+    }
+
+    pub(in crate::rust) fn numeric_call_procedure_ids(&self) -> &HashSet<String> {
+        &self.numeric_call_procedures
+    }
+}
+
+pub(in crate::rust) fn prepare_resumable_procedures(
+    target: &ScratchTarget,
+    script_starts: &[Option<&str>],
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    procedures: &[ProcedureSignature],
+    target_index: usize,
+    no_warp_timer: bool,
+) -> ResumableProcedurePlan {
+    let calls_in = |graph: &ScriptGraph, call_block_ids: &mut HashSet<String>| {
+        graph
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                ScriptNode::Block(id) => target.blocks.get(id).map(|block| (id, block)),
+                ScriptNode::LoopBoundary(_) => None,
+            })
+            .filter(|(_, block)| block.opcode == "procedures_call")
+            .filter_map(|(id, block)| {
+                call_block_ids.insert(id.clone());
+                procedure_for_call(block, procedures)
+            })
+            .map(|procedure| procedure.definition_id.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut pending = Vec::new();
+    let mut call_block_ids = HashSet::new();
+    for first in script_starts {
+        let mut graph = ScriptGraph::new();
+        graph.add_chain(target, *first, usize::MAX);
+        pending.extend(calls_in(&graph, &mut call_block_ids));
+    }
+
+    // Compute the union once for the target. Every script frame uses this
+    // shared, statically generated procedure machine, so a common procedure
+    // body is emitted once even when many event hats can call it.
+    let mut reachable = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !reachable.insert(id.clone()) {
+            continue;
+        }
+        if let Some(definition) = target.blocks.get(&id) {
+            let mut graph = ScriptGraph::new();
+            graph.add_chain(target, definition.next.as_deref(), usize::MAX);
+            pending.extend(calls_in(&graph, &mut call_block_ids));
+        }
+    }
+
+    let direct_warp_eligibility = if no_warp_timer {
+        direct_warp_eligibility(target, procedures)
+    } else {
+        HashMap::new()
+    };
+    let mut graphs = Vec::new();
+    let mut entries = HashMap::new();
+    for procedure in procedures
+        .iter()
+        .filter(|procedure| reachable.contains(&procedure.definition_id))
+    {
+        let Some(definition) = target.blocks.get(&procedure.definition_id) else {
+            continue;
+        };
+        let mut graph = ScriptGraph::new();
+        graph.add_chain(target, definition.next.as_deref(), usize::MAX);
+        let start_pc = definition
+            .next
+            .as_deref()
+            .and_then(|id| graph.block_pcs.get(id).copied())
+            .unwrap_or(usize::MAX);
+        let direct_path_name = direct_eligible(target, procedure)
+            .then(|| direct_name(target_index, procedure.frame_id));
+        let direct_path_is_none = direct_path_name.is_none();
+        let direct_warp_path = (no_warp_timer
+            && direct_path_is_none
+            && direct_warp_eligibility
+                .get(&procedure.definition_id)
+                .copied()
+                .unwrap_or(false))
+        .then(|| direct_warp_name(target_index, procedure.frame_id));
+        let numeric_direct = direct_path_name.is_some()
+            && super::super::direct_numeric::generate_numeric_direct(
+                target,
+                procedure,
+                variables,
+                lists,
+                &direct_name(target_index, procedure.frame_id),
+                true,
+            )
+            .is_some();
+        entries.insert(
+            procedure.definition_id.clone(),
+            ProcedureEntry {
+                function_id: procedure.frame_id,
+                start_pc,
+                repeat_count: graph.repeat_slots.len(),
+                direct_name: direct_path_name,
+                direct_warp_name: direct_warp_path,
+                numeric_direct,
+            },
+        );
+        graphs.push((procedure.clone(), graph));
+    }
+    let mut numeric_call_procedures = HashSet::new();
+    for block_id in call_block_ids {
+        let Some(block) = target.blocks.get(&block_id) else {
+            continue;
+        };
+        let Some(procedure) = procedure_for_call(block, procedures) else {
+            continue;
+        };
+        let Some(entry) = entries.get(&procedure.definition_id) else {
+            continue;
+        };
+        let (argument_caches, _) =
+            cached_procedure_indexes(target, block, procedure, entry, variables);
+        if numeric_list_call_candidate(target, block, procedure, entry, &argument_caches) {
+            numeric_call_procedures.insert(procedure.definition_id.clone());
+        }
+    }
+    ResumableProcedurePlan {
+        target_index,
+        graphs,
+        entries,
+        reachable,
+        numeric_call_procedures,
+    }
+}
+
+pub(in crate::rust) fn generate_resumable_procedure_step(
+    target: &ScratchTarget,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    procedures: &[ProcedureSignature],
+    plan: &ResumableProcedurePlan,
+    fast_math: bool,
+    no_warp_timer: bool,
+    share_procedures: bool,
+    output: &mut String,
+) {
+    if plan.graphs.is_empty() || !share_procedures {
+        return;
+    }
+    line(
+        output,
+        0,
+        "#[allow(dead_code, unused_variables, unused_mut, unused_assignments, unreachable_code)]",
+    );
+    line(
+        output,
+        0,
+        &format!(
+            "fn step_procedures_{}(script: &mut ScriptState, state: &mut ScratchState, clock: &dyn Clock, returned_to_script: &mut bool) -> ScriptStatus {{",
+            plan.target_index
+        ),
+    );
+    line(output, 1, "loop {");
+    line(
+        output,
+        2,
+        "let (function, pc) = match script.frames.last() {",
+    );
+    line(output, 3, "Some(frame) => (frame.function, frame.pc),");
+    line(output, 3, "None => return ScriptStatus::Complete,");
+    line(output, 2, "};");
+    line(output, 2, "match function {");
+    line(
+        output,
+        3,
+        "0 => { *returned_to_script = true; return ScriptStatus::Complete; },",
+    );
+    generate_resumable_procedure_arms(
+        target,
+        variables,
+        lists,
+        procedures,
+        plan,
+        fast_math,
+        no_warp_timer,
+        output,
+    );
+    line(output, 3, "_ => return ScriptStatus::Complete,");
+    line(output, 2, "}");
+    line(output, 1, "}");
+    line(output, 0, "}\n");
+}
+
+fn generate_resumable_procedure_arms(
+    target: &ScratchTarget,
+    variables: &HashMap<String, VariableInfo>,
+    lists: &HashMap<String, ListInfo>,
+    procedures: &[ProcedureSignature],
+    plan: &ResumableProcedurePlan,
+    fast_math: bool,
+    no_warp_timer: bool,
+    output: &mut String,
+) {
+    for (procedure, graph) in &plan.graphs {
+        let argument_accesses = procedure
+            .argument_names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                (
+                    name.clone(),
+                    format!("script.frames.last().unwrap().arguments[{index}]"),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        line(output, 3, &format!("{} => match pc {{", procedure.frame_id));
+        let mut emitted_blocks = HashSet::new();
+        let context = ScriptBlockChainContext {
+            target,
+            graph,
+            variables,
+            lists,
+            arguments: &argument_accesses,
+            procedures,
+            procedure_entries: &plan.entries,
+            fast_math,
+            no_warp_timer,
+        };
+        for node in &graph.nodes {
+            match node {
+                ScriptNode::Block(id) => {
+                    generate_resumable_block_chain(context, id, &mut emitted_blocks, output)
+                }
+                ScriptNode::LoopBoundary(id) => {
+                    let structured_repeat =
+                        structured_repeat_body(target, id, procedures, &plan.entries)
+                            .is_some_and(|body| !body.has_procedure_calls);
+                    if !structured_repeat
+                        && target
+                            .blocks
+                            .get(id)
+                            .and_then(|block| numeric_loop_plan(target, block, variables))
+                            .is_none()
+                    {
+                        generate_loop_boundary(target, id, graph, no_warp_timer, output)
+                    }
+                }
+            }
+        }
+        line(output, 4, "_ => { script.frames.pop(); continue; },");
+        line(output, 3, "},");
+    }
 }
 
 pub(in crate::rust) fn generate_resumable_script(
@@ -26,12 +294,13 @@ pub(in crate::rust) fn generate_resumable_script(
     variables: &HashMap<String, VariableInfo>,
     lists: &HashMap<String, ListInfo>,
     procedures: &[ProcedureSignature],
+    procedure_plan: &ResumableProcedurePlan,
+    share_procedures: bool,
     options: ResumableScriptOptions<'_>,
     output: &mut String,
 ) -> (usize, usize) {
     let ResumableScriptOptions {
         function_name,
-        target_index,
         fast_math,
         no_warp_timer,
     } = options;
@@ -40,85 +309,6 @@ pub(in crate::rust) fn generate_resumable_script(
     let start_pc = first
         .and_then(|id| graph.block_pcs.get(id).copied())
         .unwrap_or(usize::MAX);
-    // Compile only bodies transitively reachable from this event script. Keep
-    // the original frame IDs so calls and recursive frames retain their identity.
-    let calls_in = |current: &ScriptGraph| {
-        current
-            .nodes
-            .iter()
-            .filter_map(|node| match node {
-                ScriptNode::Block(id) => target.blocks.get(id),
-                ScriptNode::LoopBoundary(_) => None,
-            })
-            .filter(|block| block.opcode == "procedures_call")
-            .filter_map(|block| procedure_for_call(block, procedures))
-            .map(|procedure| procedure.definition_id.clone())
-            .collect::<Vec<_>>()
-    };
-    let mut reachable = HashSet::new();
-    let mut pending = calls_in(&graph);
-    while let Some(id) = pending.pop() {
-        if !reachable.insert(id.clone()) {
-            continue;
-        }
-        if let Some(definition) = target.blocks.get(&id) {
-            let mut called_graph = ScriptGraph::new();
-            called_graph.add_chain(target, definition.next.as_deref(), usize::MAX);
-            pending.extend(calls_in(&called_graph));
-        }
-    }
-    let mut procedure_graphs = Vec::new();
-    let mut procedure_entries = HashMap::new();
-    let direct_warp_eligibility = if no_warp_timer {
-        direct_warp_eligibility(target, procedures)
-    } else {
-        HashMap::new()
-    };
-    for procedure in procedures
-        .iter()
-        .filter(|procedure| reachable.contains(&procedure.definition_id))
-    {
-        let Some(definition) = target.blocks.get(&procedure.definition_id) else {
-            continue;
-        };
-        let mut procedure_graph = ScriptGraph::new();
-        procedure_graph.add_chain(target, definition.next.as_deref(), usize::MAX);
-        let procedure_start = definition
-            .next
-            .as_deref()
-            .and_then(|id| procedure_graph.block_pcs.get(id).copied())
-            .unwrap_or(usize::MAX);
-        let direct_path_name = direct_eligible(target, procedure)
-            .then(|| direct_name(target_index, procedure.frame_id));
-        let direct_warp_name = (no_warp_timer
-            && direct_path_name.is_none()
-            && direct_warp_eligibility
-                .get(&procedure.definition_id)
-                .copied()
-                .unwrap_or(false))
-        .then(|| direct_warp_name(target_index, procedure.frame_id));
-        procedure_entries.insert(
-            procedure.definition_id.clone(),
-            ProcedureEntry {
-                function_id: procedure.frame_id,
-                start_pc: procedure_start,
-                repeat_count: procedure_graph.repeat_slots.len(),
-                direct_name: direct_path_name,
-                direct_warp_name,
-                numeric_direct: direct_eligible(target, procedure)
-                    && super::super::direct_numeric::generate_numeric_direct(
-                        target,
-                        procedure,
-                        variables,
-                        lists,
-                        &direct_name(target_index, procedure.frame_id),
-                        true,
-                    )
-                    .is_some(),
-            },
-        );
-        procedure_graphs.push((procedure, procedure_graph));
-    }
 
     line(
         output,
@@ -133,16 +323,43 @@ pub(in crate::rust) fn generate_resumable_script(
         ),
     );
     line(output, 1, "loop {");
-    line(
-        output,
-        2,
-        "let (function, pc) = match script.frames.last() {",
-    );
-    line(output, 3, "Some(frame) => (frame.function, frame.pc),");
-    line(output, 3, "None => return ScriptStatus::Complete,");
-    line(output, 2, "};");
-    line(output, 2, "match function {");
-    line(output, 3, "0 => match pc {");
+    if share_procedures && !procedure_plan.graphs.is_empty() {
+        line(
+            output,
+            2,
+            "if script.frames.last().is_some_and(|frame| frame.function != 0) {",
+        );
+        line(output, 3, "let mut returned_to_script = false;");
+        line(
+            output,
+            3,
+            &format!(
+                "let status = step_procedures_{}(script, state, clock, &mut returned_to_script);",
+                procedure_plan.target_index
+            ),
+        );
+        line(output, 3, "if !returned_to_script { return status; }");
+        line(output, 3, "continue;");
+        line(output, 2, "}");
+    }
+    if !share_procedures && !procedure_plan.graphs.is_empty() {
+        line(
+            output,
+            2,
+            "let (function, pc) = match script.frames.last() {",
+        );
+        line(output, 3, "Some(frame) => (frame.function, frame.pc),");
+        line(output, 3, "None => return ScriptStatus::Complete,");
+        line(output, 2, "};");
+        line(output, 2, "match function {");
+        line(output, 3, "0 => match pc {");
+    } else {
+        line(output, 2, "let pc = match script.frames.last() {");
+        line(output, 3, "Some(frame) => frame.pc,");
+        line(output, 3, "None => return ScriptStatus::Complete,");
+        line(output, 2, "};");
+        line(output, 2, "match pc {");
+    }
     let mut emitted_blocks = HashSet::new();
     let no_arguments = HashMap::new();
     let script_context = ScriptBlockChainContext {
@@ -152,7 +369,7 @@ pub(in crate::rust) fn generate_resumable_script(
         lists,
         arguments: &no_arguments,
         procedures,
-        procedure_entries: &procedure_entries,
+        procedure_entries: &procedure_plan.entries,
         fast_math,
         no_warp_timer,
     };
@@ -162,73 +379,85 @@ pub(in crate::rust) fn generate_resumable_script(
                 generate_resumable_block_chain(script_context, id, &mut emitted_blocks, output)
             }
             ScriptNode::LoopBoundary(id) => {
-                if target
-                    .blocks
-                    .get(id)
-                    .and_then(|block| numeric_loop_plan(target, block, variables))
-                    .is_none()
+                let structured_repeat =
+                    structured_repeat_body(target, id, procedures, &procedure_plan.entries)
+                        .is_some_and(|body| !body.has_procedure_calls);
+                if !structured_repeat
+                    && target
+                        .blocks
+                        .get(id)
+                        .and_then(|block| numeric_loop_plan(target, block, variables))
+                        .is_none()
                 {
                     generate_loop_boundary(target, id, &graph, no_warp_timer, output);
                 }
             }
         }
     }
-    line(output, 4, "_ => return ScriptStatus::Complete,");
-    line(output, 3, "},");
-
-    for (procedure, procedure_graph) in &procedure_graphs {
-        let argument_accesses = procedure
-            .argument_names
-            .iter()
-            .enumerate()
-            .map(|(index, name)| {
-                (
-                    name.clone(),
-                    format!("script.frames.last().unwrap().arguments[{index}]"),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        line(output, 3, &format!("{} => match pc {{", procedure.frame_id));
-        let mut emitted_blocks = HashSet::new();
-        let procedure_context = ScriptBlockChainContext {
+    if !share_procedures && !procedure_plan.graphs.is_empty() {
+        line(output, 3, "_ => return ScriptStatus::Complete,");
+        line(output, 3, "},");
+        generate_resumable_procedure_arms(
             target,
-            graph: procedure_graph,
             variables,
             lists,
-            arguments: &argument_accesses,
             procedures,
-            procedure_entries: &procedure_entries,
+            procedure_plan,
             fast_math,
             no_warp_timer,
-        };
-        for node in &procedure_graph.nodes {
-            match node {
-                ScriptNode::Block(id) => generate_resumable_block_chain(
-                    procedure_context,
-                    id,
-                    &mut emitted_blocks,
-                    output,
-                ),
-                ScriptNode::LoopBoundary(id) => {
-                    if target
-                        .blocks
-                        .get(id)
-                        .and_then(|block| numeric_loop_plan(target, block, variables))
-                        .is_none()
-                    {
-                        generate_loop_boundary(target, id, procedure_graph, no_warp_timer, output)
-                    }
-                }
-            }
-        }
-        line(output, 4, "_ => { script.frames.pop(); continue; },");
-        line(output, 3, "},");
+            output,
+        );
+        line(output, 3, "_ => return ScriptStatus::Complete,");
+        line(output, 2, "}");
+    } else {
+        line(output, 3, "_ => return ScriptStatus::Complete,");
+        line(output, 2, "}");
     }
-    line(output, 3, "_ => return ScriptStatus::Complete,");
-    line(output, 2, "}");
     line(output, 1, "}");
     line(output, 0, "}\n");
     (start_pc, graph.repeat_slots.len())
+}
+
+fn structured_repeat_body(
+    target: &ScratchTarget,
+    loop_id: &str,
+    procedures: &[ProcedureSignature],
+    entries: &HashMap<String, ProcedureEntry>,
+) -> Option<StructuredBody> {
+    let block = target.blocks.get(loop_id)?;
+    if block.opcode != "control_repeat" {
+        return None;
+    }
+    let Some(InputValue::BlockReference(first)) =
+        block.inputs.get("SUBSTACK").and_then(parse_input)
+    else {
+        return None;
+    };
+    structured_loop_body(target, loop_id, first, procedures, entries)
+}
+
+fn structured_if_body(
+    target: &ScratchTarget,
+    owner_id: &str,
+    block: &ScratchBlock,
+    procedures: &[ProcedureSignature],
+    entries: &HashMap<String, ProcedureEntry>,
+) -> Option<StructuredBody> {
+    let mut blocks = HashSet::new();
+    let mut has_procedure_calls = false;
+    for name in ["SUBSTACK", "SUBSTACK2"] {
+        let Some(InputValue::BlockReference(first)) = block.inputs.get(name).and_then(parse_input)
+        else {
+            continue;
+        };
+        let body = structured_loop_body(target, owner_id, first, procedures, entries)?;
+        blocks.extend(body.blocks);
+        has_procedure_calls |= body.has_procedure_calls;
+    }
+    Some(StructuredBody {
+        blocks,
+        has_procedure_calls,
+    })
 }
 
 fn generate_resumable_block(context: ScriptBlockChainContext<'_>, id: &str, output: &mut String) {
@@ -925,10 +1154,14 @@ fn generate_resumable_block_chain(
         }),
         ScriptNode::LoopBoundary(_) => None,
     });
-    if let Some((loop_id, enclosing)) =
-        enclosing_loop.filter(|_| structured_loop_body(target, id, procedures, procedure_entries))
+    let structured_loop_blocks = enclosing_loop.and_then(|(loop_id, _)| {
+        structured_loop_body(target, loop_id, id, procedures, procedure_entries)
+    });
+    if let (Some((loop_id, enclosing)), Some(body_plan)) = (enclosing_loop, structured_loop_blocks)
     {
-        emitted_blocks.insert(id.to_owned());
+        if !body_plan.has_procedure_calls {
+            emitted_blocks.extend(body_plan.blocks);
+        }
         line(output, 4, &format!("{} => {{", graph.block_pcs[id]));
         let repeat = enclosing.opcode == "control_repeat";
         let (numeric, deferred, textual) = if repeat {
@@ -952,6 +1185,15 @@ fn generate_resumable_block_chain(
             Vec::new()
         };
         let has_locals = !numeric.is_empty() || !dynamic.is_empty();
+        let has_visible_mutation = deferred.iter().any(|slot| {
+            variables
+                .values()
+                .any(|variable| variable.slot == *slot && variable.monitor_visible)
+        }) || dynamic.iter().any(|variable| variable.monitor_visible);
+        // The fast branch can never pass can_defer_variable_writes when a
+        // written variable has a visible monitor. Omit that unreachable copy;
+        // the generic path already preserves every monitor update.
+        let has_optimized_locals = has_locals && !has_visible_mutation;
         let mut typed_variables = variables.clone();
         for variable in typed_variables.values_mut() {
             if numeric_slots.contains(&variable.slot) {
@@ -960,7 +1202,7 @@ fn generate_resumable_block_chain(
                 variable.index_read_override = Some(format!("&scratch_dynamic_{}", variable.slot));
             }
         }
-        if has_locals {
+        if has_optimized_locals {
             let pattern = numeric
                 .iter()
                 .filter(|v| needed.contains(&v.slot))
@@ -1031,9 +1273,9 @@ fn generate_resumable_block_chain(
             last = next;
         }
         let no_numeric_slots = HashSet::new();
-        for optimized in 0..if has_locals { 2 } else { 1 } {
-            let typed = has_locals && optimized == 0;
-            let block_indent = if has_locals { 6 } else { 5 };
+        for optimized in 0..if has_optimized_locals { 2 } else { 1 } {
+            let typed = has_optimized_locals && optimized == 0;
+            let block_indent = if has_optimized_locals { 6 } else { 5 };
             if repeat && has_locals {
                 let slot = graph.repeat_slots[loop_id];
                 line(
@@ -1206,11 +1448,11 @@ fn generate_resumable_block_chain(
                     ),
                 );
             }
-            if typed {
+            if has_optimized_locals && optimized == 0 {
                 line(output, 5, "} else {");
             }
         }
-        if has_locals {
+        if has_optimized_locals {
             line(output, 5, "}");
         }
         line(output, 5, "continue;");
@@ -1437,6 +1679,8 @@ fn generate_resumable_block_chain(
     }
     if matches!(block.opcode.as_str(), "control_if" | "control_if_else")
         && partial_structured_body(target, id)
+        && structured_if_body(target, id, block, procedures, procedure_entries)
+            .is_none_or(|body| body.has_procedure_calls)
     {
         emitted_blocks.insert(id.to_owned());
         let (numeric, deferred, textual) =

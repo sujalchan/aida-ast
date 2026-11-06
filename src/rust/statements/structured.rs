@@ -1,19 +1,26 @@
 use super::*;
 
+pub(super) struct StructuredBody {
+    pub(super) blocks: HashSet<String>,
+    pub(super) has_procedure_calls: bool,
+}
+
 pub(super) fn structured_loop_body(
     target: &ScratchTarget,
+    loop_id: &str,
     first: &str,
     procedures: &[ProcedureSignature],
     entries: &HashMap<String, ProcedureEntry>,
-) -> bool {
+) -> Option<StructuredBody> {
     let mut pending = vec![first];
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::<String>::new();
+    let mut has_procedure_calls = false;
     while let Some(id) = pending.pop() {
-        if !seen.insert(id) || seen.len() > 80 {
-            return false;
+        if !seen.insert(id.to_owned()) || seen.len() > 80 {
+            return None;
         }
         let Some(block) = target.blocks.get(id) else {
-            return false;
+            return None;
         };
         match block.opcode.as_str() {
             "control_if" | "control_if_else" => {
@@ -26,14 +33,15 @@ pub(super) fn structured_loop_body(
                 }
             }
             "procedures_call" => {
+                has_procedure_calls = true;
                 let Some(procedure) = procedure_for_call(block, procedures) else {
-                    return false;
+                    return None;
                 };
                 if entries
                     .get(&procedure.definition_id)
                     .is_none_or(|entry| entry.direct_name.is_none())
                 {
-                    return false;
+                    return None;
                 }
             }
             "data_setvariableto"
@@ -47,13 +55,31 @@ pub(super) fn structured_loop_body(
             | "pen_penDown"
             | "pen_penUp"
             | "pen_setPenColorToColor" => {}
-            _ => return false,
+            _ => return None,
         }
         if let Some(next) = block.next.as_deref() {
             pending.push(next);
         }
     }
-    true
+
+    // These blocks are emitted inline by the structured loop arm, so their
+    // individual dispatcher arms can be omitted only when the Scratch graph
+    // gives every block a single parent within this loop body. Malformed or
+    // shared subgraphs keep the conservative resumable states.
+    if seen.iter().any(|id| {
+        target
+            .blocks
+            .get(id)
+            .and_then(|block| block.parent.as_deref())
+            .is_none_or(|parent| parent != loop_id && !seen.contains(parent))
+    }) {
+        return None;
+    }
+
+    Some(StructuredBody {
+        blocks: seen,
+        has_procedure_calls,
+    })
 }
 
 pub(super) fn structured_sync_statement(opcode: &str) -> bool {

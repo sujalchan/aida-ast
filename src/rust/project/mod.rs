@@ -38,6 +38,7 @@ pub(super) struct VariableInfo {
     pub(super) target_index: usize,
     pub(super) numeric: bool,
     pub(super) non_nan: bool,
+    pub(super) monitor_visible: bool,
     pub(super) index_read_override: Option<String>,
 }
 
@@ -573,6 +574,8 @@ fn generate_internal(
     output.push_str("    pub fn set_observable_event_sink(&mut self, sink: Option<std::sync::mpsc::Sender<ObservableEvent>>) { self.state.set_event_sink(sink); }\n");
     output.push_str("    pub fn run_until_complete(&mut self) { loop { match self.advance_frame() { SchedulerStatus::Progressed => {}, SchedulerStatus::WaitingUntil(deadline) => std::thread::sleep(self.duration_until(deadline)), SchedulerStatus::WaitingForSignal => std::thread::sleep(std::time::Duration::from_millis(8)), SchedulerStatus::Complete => break } } }\n}\n\n");
     output.push_str("#[allow(dead_code)]\npub fn run() { let mut program = GeneratedProgram::new(); program.run_until_complete(); }\n");
+    let (output, uses_pc_setter, uses_pc_transition, uses_frame_accessors) =
+        compact_resumable_state_source(&output);
     let identifiers = rust_identifiers(&output);
     let imports = runtime_imports(&identifiers);
     let print_value_macro = if identifiers.contains("print_value") {
@@ -580,9 +583,79 @@ fn generate_internal(
     } else {
         ""
     };
+    let state_machine_macros = match (uses_pc_setter, uses_pc_transition) {
+        (false, false) => "",
+        (true, false) => {
+            "macro_rules! __aida_set_pc { ($script:expr, $pc:expr) => { ($script).frame_mut().pc = $pc; }; }\n\n"
+        }
+        (false, true) => {
+            "macro_rules! __aida_continue_at { ($script:expr, $pc:expr) => {{ ($script).frame_mut().pc = $pc; continue; }}; }\n\n"
+        }
+        (true, true) => "macro_rules! __aida_set_pc { ($script:expr, $pc:expr) => { ($script).frame_mut().pc = $pc; }; }\nmacro_rules! __aida_continue_at { ($script:expr, $pc:expr) => {{ ($script).frame_mut().pc = $pc; continue; }}; }\n\n",
+    };
+    let frame_accessors = if uses_frame_accessors {
+        "\nimpl ScriptState {\n    #[inline(always)]\n    fn frame(&self) -> &ProcedureFrame { self.frames.last().unwrap() }\n    #[inline(always)]\n    fn frame_mut(&mut self) -> &mut ProcedureFrame { self.frames.last_mut().unwrap() }\n}\n"
+    } else {
+        ""
+    };
     (
-        format!("{imports}{print_value_macro}{output}"),
+        format!("{imports}{print_value_macro}{state_machine_macros}{output}{frame_accessors}"),
         external_list_data,
+    )
+}
+
+/// Factor the repeated generated frame lookups and program-counter transitions
+/// into always-inlined accessors and compile-time macros. The macros expand at
+/// each call site, so they add no runtime dispatch or function-call overhead.
+fn compact_resumable_state_source(source: &str) -> (String, bool, bool, bool) {
+    let source = source
+        .replace("script.frames.last().unwrap()", "script.frame()")
+        .replace("script.frames.last_mut().unwrap()", "script.frame_mut()");
+    let mut output = String::with_capacity(source.len());
+    let mut uses_pc_setter = false;
+    let mut uses_pc_transition = false;
+    let mut uses_frame_accessors = source.contains("script.frame()")
+        || source.contains("script.frame_mut()");
+    let lines = source.split_inclusive('\n').collect::<Vec<_>>();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
+        let without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = without_newline.trim_start();
+        let indent_len = without_newline.len() - trimmed.len();
+        if let Some(assignment) = trimmed.strip_prefix("script.frame_mut().pc = ") {
+            if let Some(pc) = assignment.strip_suffix(';') {
+                if lines
+                    .get(index + 1)
+                    .is_some_and(|next| next.trim() == "continue;")
+                {
+                    output.push_str(&format!(
+                        "{}__aida_continue_at!(script, {pc});\n",
+                        &without_newline[..indent_len]
+                    ));
+                    uses_pc_transition = true;
+                    uses_frame_accessors = true;
+                    index += 2;
+                    continue;
+                }
+                output.push_str(&format!(
+                    "{}__aida_set_pc!(script, {pc});\n",
+                    &without_newline[..indent_len]
+                ));
+                uses_pc_setter = true;
+                uses_frame_accessors = true;
+                index += 1;
+                continue;
+            }
+        }
+        output.push_str(line);
+        index += 1;
+    }
+    (
+        output,
+        uses_pc_setter,
+        uses_pc_transition,
+        uses_frame_accessors,
     )
 }
 

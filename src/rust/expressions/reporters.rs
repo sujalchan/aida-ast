@@ -107,6 +107,33 @@ pub(super) fn block_expression(
             numeric_input("NUM2", active)
         )
     };
+    if matches!(
+        block.opcode.as_str(),
+        "operator_add" | "operator_subtract" | "operator_multiply" | "operator_divide"
+    ) {
+        let left = constant_numeric_input(
+            target,
+            block.inputs.get("NUM1"),
+            &mut HashSet::new(),
+        );
+        let right = constant_numeric_input(
+            target,
+            block.inputs.get("NUM2"),
+            &mut HashSet::new(),
+        );
+        if let (Some(left), Some(right)) = (left, right) {
+            let folded = match block.opcode.as_str() {
+                "operator_add" => left + right,
+                "operator_subtract" => left - right,
+                "operator_multiply" => left * right,
+                "operator_divide" => left / right,
+                _ => unreachable!(),
+            };
+            if folded.is_finite() {
+                return number_literal(&Value::from(folded));
+            }
+        }
+    }
     // Canonical small integer text has exactly the same Scratch comparison
     // text as its numeric value, including when the other operand falls back
     // to a string comparison. Emit a number to avoid parsing it on every test.

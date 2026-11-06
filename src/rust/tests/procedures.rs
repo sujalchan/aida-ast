@@ -77,8 +77,8 @@ fn emits_custom_blocks_as_resumable_argument_frames() {
     assert!(output.contains("arguments[0]).clone()"));
     assert!(output.contains("\"hello\").to_owned().into()"));
     assert!(output.contains("script.frames.push(ProcedureFrame"));
-    assert!(output.contains("ProcedureFrame::new(1"));
-    assert!(output.contains("new_clone_start_script_sprite1_1(_instance)"));
+    assert!(output.contains("script.frames.push(ProcedureFrame::new("));
+    assert!(output.contains("new_clone_start_script_sprite1_"));
 }
 
 #[test]
@@ -112,11 +112,11 @@ fn clone_nested_custom_calls_preserve_warp_mode_and_the_callers_pc() {
 
     let output = generate(&project);
     assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
-    assert!(output.contains("new_clone_start_script_sprite1_1(_instance)"));
+    assert!(output.contains("new_clone_start_script_sprite1_"));
     assert!(output.contains("inherited_warp || true"));
     assert!(output.contains("inherited_warp || false"));
     assert!(output.contains("if !(scratch_bool(state.get(0)))"));
-    assert!(output.contains("script.frames.last_mut().unwrap().pc = 1;"));
+    assert!(output.contains("__aida_set_pc!(script, 1);"));
     assert!(
         output.contains("if script.yield_at_safe_point(clock) { return ScriptStatus::Yield; }")
     );
@@ -181,17 +181,42 @@ fn emits_and_invokes_each_green_flag_script_separately() {
     .unwrap();
 
     let output = generate(&project);
-    assert!(output.contains("fn step_green_flag_script_sprite1_1"));
-    assert!(output.contains("fn step_green_flag_script_sprite1_2"));
+    assert!(output.matches("fn step_green_flag_script_sprite1_").count() >= 2);
     // each flag script keeps its own native write while sharing the variable slot.
     assert!(output.contains("state.set_local_number(0, 1.0_f64);"));
     assert!(output.contains("state.set_local_number(0, 2.0_f64);"));
-    assert!(output.contains("fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_1(), new_green_flag_script_sprite1_2()] }"));
+    assert!(output.contains("fn new_scripts() -> Vec<GeneratedScript> { vec![new_green_flag_script_sprite1_"));
     assert!(output.contains("pub fn run_until_complete(&mut self)"));
     assert!(output.contains("pub fn step(&mut self) -> bool"));
     assert!(output.contains("pub fn restart(&mut self)"));
     // generated repeat branches may emit more than one valid yield site per script.
     assert!(output.matches("return ScriptStatus::Yield;").count() >= 2);
+}
+
+#[test]
+fn identical_event_scripts_reuse_one_statically_dispatched_step_body() {
+    let project = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Sprite1",
+                "isStage": false,
+                "variables": {},
+                "blocks": {
+                    "first_hat": {"opcode":"event_whenflagclicked", "next":"first_say", "topLevel":true, "inputs":{}, "fields":{}},
+                    "first_say": {"opcode":"looks_say", "next":null, "parent":"first_hat", "inputs":{"MESSAGE":[1,[10,"same"]]}, "fields":{}},
+                    "second_hat": {"opcode":"event_whenflagclicked", "next":"second_say", "topLevel":true, "inputs":{}, "fields":{}},
+                    "second_say": {"opcode":"looks_say", "next":null, "parent":"second_hat", "inputs":{"MESSAGE":[1,[10,"same"]]}, "fields":{}}
+                }
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = generate(&project);
+    assert_eq!(output.matches("fn step_green_flag_script_sprite1_").count(), 1);
+    assert!(output.contains("use self::step_green_flag_script_sprite1_"));
+    assert!(output.contains(" as step_green_flag_script_sprite1_"));
 }
 
 #[test]
@@ -216,7 +241,7 @@ fn wait_in_custom_block_advances_its_frame_before_scheduler_suspension() {
 
     let output = generate(&project);
     assert!(!output.contains("wait_deadlines"));
-    assert!(output.contains("script.frames.last_mut().unwrap().pc = 1;"));
+    assert!(output.contains("__aida_set_pc!(script, 1);"));
     assert!(output.contains("ScriptStatus::WaitUntil(wait_deadline)"));
     assert!(output.contains("clock.now_millis().saturating_add(duration_ms)"));
     assert!(!output.contains("clock.now_millis() < wait_deadline"));
@@ -224,4 +249,60 @@ fn wait_in_custom_block_advances_its_frame_before_scheduler_suspension() {
     assert!(output.contains("fn new_clone_scripts(target: usize, _instance: usize)"));
     assert!(!output.contains("if script.warp_budget_expired(clock) { return ScriptStatus::Yield; }\n                            continue;"));
     assert!(output.contains("pub fn advance(&mut self) -> SchedulerStatus"));
+}
+
+#[test]
+fn resumable_procedure_body_is_emitted_once_for_multiple_scripts() {
+    let mut blocks = json!({
+        "first_hat": {"opcode":"event_whenflagclicked", "next":"first_call", "topLevel":true, "inputs":{}, "fields":{}},
+        "first_call": {"opcode":"procedures_call", "next":null, "parent":"first_hat", "inputs":{}, "fields":{}, "mutation":{"proccode":"shared delay", "argumentids":"[]", "warp":"false"}},
+        "second_hat": {"opcode":"event_whenflagclicked", "next":"second_call", "topLevel":true, "inputs":{}, "fields":{}},
+        "second_call": {"opcode":"procedures_call", "next":null, "parent":"second_hat", "inputs":{}, "fields":{}, "mutation":{"proccode":"shared delay", "argumentids":"[]", "warp":"false"}},
+        "definition": {"opcode":"procedures_definition", "next":"wait0", "topLevel":true, "inputs":{"custom_block":[1,"prototype"]}, "fields":{}},
+        "prototype": {"opcode":"procedures_prototype", "parent":"definition", "inputs":{}, "fields":{}, "mutation":{"proccode":"shared delay", "argumentnames":"[]", "argumentids":"[]", "argumentdefaults":"[]", "warp":"false"}}
+    });
+    for index in 0..12 {
+        let next = (index < 11).then(|| format!("wait{}", index + 1));
+        blocks.as_object_mut().unwrap().insert(
+            format!("wait{index}"),
+            json!({
+                "opcode":"control_wait",
+                "next":next,
+                "parent":if index == 0 {"definition".to_owned()} else {"wait".to_owned() + &(index - 1).to_string()},
+                "inputs":{"DURATION":[1,[4,"0.25"]]},
+                "fields":{}
+            }),
+        );
+    }
+    let project = parse_project(
+        &json!({
+            "targets": [{
+                "name": "Sprite1",
+                "isStage": false,
+                "variables": {},
+                "blocks": blocks
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let output = generate(&project);
+    assert_eq!(output.matches("fn step_procedures_0(").count(), 1);
+    assert_eq!(output.matches("=> match pc {").count(), 1);
+    assert_eq!(
+        output
+            .matches("script.frames.push(ProcedureFrame::new(")
+            .count(),
+        1
+    );
+    assert!(output.contains("use self::step_green_flag_script_sprite1_"));
+    assert!(output.contains(" as step_green_flag_script_sprite1_"));
+
+    let step_start = output
+        .find("fn step_green_flag_script_sprite1_")
+        .unwrap();
+    let step_end = output[step_start..].find("\n}\n").unwrap() + step_start;
+    let first_script = &output[step_start..step_end];
+    assert!(!first_script.contains("ScriptStatus::WaitUntil"));
 }

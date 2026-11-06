@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde_json::Value;
 
 use crate::parser::{InputValue, ScratchTarget, parse_input};
@@ -22,6 +24,7 @@ pub(super) fn procedure_signatures(target: &ScratchTarget) -> Vec<ProcedureSigna
     definitions.sort_by(|(left_id, _), (right_id, _)| left_id.cmp(right_id));
 
     let mut procedures = Vec::new();
+    let mut used_frame_ids = HashSet::new();
     for (definition_id, definition) in definitions {
         let Some(InputValue::BlockReference(prototype_id)) =
             definition.inputs.get("custom_block").and_then(parse_input)
@@ -41,7 +44,7 @@ pub(super) fn procedure_signatures(target: &ScratchTarget) -> Vec<ProcedureSigna
         let argument_names = parse_string_array(mutation.get("argumentnames"));
         let argument_ids = parse_string_array(mutation.get("argumentids"));
         procedures.push(ProcedureSignature {
-            frame_id: procedures.len() + 1,
+            frame_id: stable_frame_id(definition_id, &mut used_frame_ids),
             definition_id: definition_id.to_owned(),
             proccode: proccode.to_owned(),
             argument_ids,
@@ -57,6 +60,24 @@ pub(super) fn procedure_signatures(target: &ScratchTarget) -> Vec<ProcedureSigna
         });
     }
     procedures
+}
+
+fn stable_frame_id(definition_id: &str, used: &mut HashSet<usize>) -> usize {
+    for salt in 0_u32.. {
+        let mut hash = 0x811c_9dc5_u32;
+        for byte in definition_id
+            .bytes()
+            .chain(salt.to_le_bytes().into_iter())
+        {
+            hash ^= u32::from(byte);
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+        let frame_id = hash.max(1) as usize;
+        if used.insert(frame_id) {
+            return frame_id;
+        }
+    }
+    unreachable!("procedure frame ID collision space exhausted")
 }
 
 fn parse_string_array(value: Option<&Value>) -> Vec<String> {
