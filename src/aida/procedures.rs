@@ -186,20 +186,16 @@ impl TargetGenerator<'_> {
             if parent_block.opcode == "procedures_definition"
                 || parent_block.opcode == "procedures_prototype"
             {
-                if let Ok(procedure) = self.procedure(parent_block) {
-                    if let Some(index) = procedure
+                if let Ok(procedure) = self.procedure(parent_block)
+                    && let Some(index) = procedure
                         .argument_names
                         .iter()
                         .position(|name| name == argument_name)
-                    {
-                        if let Some(argument_id) = procedure.argument_ids.get(index) {
-                            if let Some(allocated_name) =
-                                allocated_parameter_names(&procedure).get(argument_id)
-                            {
-                                return allocated_name.clone();
-                            }
-                        }
-                    }
+                    && let Some(argument_id) = procedure.argument_ids.get(index)
+                    && let Some(allocated_name) =
+                        allocated_parameter_names(&procedure).get(argument_id)
+                {
+                    return allocated_name.clone();
                 }
                 break;
             }

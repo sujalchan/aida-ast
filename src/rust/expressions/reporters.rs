@@ -1,47 +1,6 @@
-// Copyright (c) 2026 AIDA AST contributers (see AUTHORS.md)
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+use super::*;
 
-//! lowers Scratch inputs and reporter blocks into Rust expressions.
-//!
-//! follows reporter references recursively, selects a lowering by opcode, and
-//! uses the sibling literal helpers to preserve Scratch input representations.
-
-use std::collections::{HashMap, HashSet};
-
-use serde_json::Value;
-
-use crate::parser::{InputValue, ScratchBlock, ScratchTarget, parse_input};
-
-use super::{
-    literals::{field_value, number_literal, quote, text_literal},
-    project::{ListInfo, VariableInfo},
-    statements::variable_field,
-};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum LocalValueKind {
-    Number,
-    Text,
-    Boolean,
-}
-
-pub(super) struct LocalExpression {
-    pub(super) code: String,
-    pub(super) kind: LocalValueKind,
-}
-
-fn list_field(
+pub(super) fn list_field(
     block: &ScratchBlock,
     field: &str,
     lists: &HashMap<String, ListInfo>,
@@ -51,7 +10,7 @@ fn list_field(
 }
 
 // convert a scratch input into a rust value expression, following reporter links recursively.
-pub(super) fn expression(
+pub(in crate::rust) fn expression(
     target: &ScratchTarget,
     input: Option<&Value>,
     variables: &HashMap<String, VariableInfo>,
@@ -88,7 +47,7 @@ pub(super) fn expression(
 }
 
 // choose the rust lowering for a reporter block based on its scratch opcode.
-fn block_expression(
+pub(super) fn block_expression(
     target: &ScratchTarget,
     block: &ScratchBlock,
     variables: &HashMap<String, VariableInfo>,
@@ -125,20 +84,19 @@ fn block_expression(
                 _ => None,
             })
             .filter(|reporter| reporter.opcode == "data_itemoflist");
-        if let Some(reporter) = candidate {
-            if let Some(list) =
+        if let Some(reporter) = candidate
+            && let Some(list) =
                 list_field(reporter, "LIST", lists).filter(|list| list.cache_numeric_reads)
-            {
-                let index = expression(
-                    target,
-                    reporter.inputs.get("INDEX"),
-                    variables,
-                    lists,
-                    arguments,
-                    active,
-                );
-                return format!("state.list({}).get_cached_number({index})", list.slot);
-            }
+        {
+            let index = expression(
+                target,
+                reporter.inputs.get("INDEX"),
+                variables,
+                lists,
+                arguments,
+                active,
+            );
+            return format!("state.list({}).get_cached_number({index})", list.slot);
         }
         input(name, active)
     };
@@ -166,14 +124,12 @@ fn block_expression(
             );
             if let Some(InputValue::String(value)) =
                 value.and_then(parse_input).filter(|_| !both_literals)
+                && let Some(text) = value.as_str()
+                && let Ok(number) = text.parse::<i32>()
+                && number.unsigned_abs() <= 1_000_000
+                && number.to_string() == text
             {
-                if let Some(text) = value.as_str() {
-                    if let Ok(number) = text.parse::<i32>() {
-                        if number.unsigned_abs() <= 1_000_000 && number.to_string() == text {
-                            return format!("{number}.0_f64");
-                        }
-                    }
-                }
+                return format!("{number}.0_f64");
             }
             input(name, active)
         };
@@ -399,7 +355,7 @@ fn block_expression(
     }
 }
 
-fn comparison_input_is_value_ref(
+pub(super) fn comparison_input_is_value_ref(
     target: &ScratchTarget,
     input: Option<&Value>,
     variables: &HashMap<String, VariableInfo>,
@@ -427,7 +383,7 @@ fn comparison_input_is_value_ref(
 
 // Numeric comparison operands can use native operators except for NaN,
 // where Scratch deliberately falls back to text ordering.
-fn comparison_input_is_numeric(
+pub(super) fn comparison_input_is_numeric(
     target: &ScratchTarget,
     input: Option<&Value>,
     variables: &HashMap<String, VariableInfo>,
@@ -476,7 +432,7 @@ fn comparison_input_is_numeric(
 }
 
 // specialize direct numeric list comparisons while retaining dynamic fallbacks.
-fn numeric_list_equality(
+pub(super) fn numeric_list_equality(
     target: &ScratchTarget,
     block: &ScratchBlock,
     variables: &HashMap<String, VariableInfo>,
@@ -506,7 +462,7 @@ fn numeric_list_equality(
     None
 }
 
-fn direct_variable_input(
+pub(super) fn direct_variable_input(
     target: &ScratchTarget,
     input: Option<&Value>,
     variables: &HashMap<String, VariableInfo>,
@@ -525,7 +481,7 @@ fn direct_variable_input(
     }
 }
 
-fn current_expression(block: &ScratchBlock) -> String {
+pub(super) fn current_expression(block: &ScratchBlock) -> String {
     block
         .fields
         .get("CURRENTMENU")
@@ -536,7 +492,7 @@ fn current_expression(block: &ScratchBlock) -> String {
         .map_or_else(|| "0.0".to_owned(), |method| format!("state.{method}()"))
 }
 
-fn current_method(menu: &str) -> Option<&'static str> {
+pub(super) fn current_method(menu: &str) -> Option<&'static str> {
     match menu.to_ascii_uppercase().as_str() {
         "YEAR" => Some("current_year"),
         "MONTH" => Some("current_month"),
@@ -549,7 +505,7 @@ fn current_method(menu: &str) -> Option<&'static str> {
     }
 }
 
-fn identical_literal_inputs(block: &ScratchBlock) -> bool {
+pub(super) fn identical_literal_inputs(block: &ScratchBlock) -> bool {
     let left = block.inputs.get("OPERAND1").and_then(parse_input);
     let right = block.inputs.get("OPERAND2").and_then(parse_input);
     match (left, right) {
@@ -562,7 +518,7 @@ fn identical_literal_inputs(block: &ScratchBlock) -> bool {
 }
 
 // evaluate constant arithmetic using scratch's numeric input conversion.
-pub(super) fn constant_numeric_input(
+pub(in crate::rust) fn constant_numeric_input(
     target: &ScratchTarget,
     input: Option<&Value>,
     active: &mut HashSet<String>,
@@ -625,435 +581,7 @@ pub(super) fn constant_numeric_input(
 }
 
 // collect variables that a native numeric loop can safely keep in f64 locals.
-pub(super) fn collect_numeric_local_slots(
-    target: &ScratchTarget,
-    input: Option<&Value>,
-    variables: &HashMap<String, VariableInfo>,
-    slots: &mut HashSet<usize>,
-    active: &mut HashSet<String>,
-) -> bool {
-    match input.and_then(parse_input) {
-        Some(InputValue::Number(_) | InputValue::String(_)) => true,
-        Some(InputValue::VariableReference(reference)) => variables
-            .get(reference.id)
-            .filter(|variable| variable.numeric)
-            .is_some_and(|variable| {
-                slots.insert(variable.slot);
-                true
-            }),
-        Some(InputValue::BlockReference(id)) => {
-            if !active.insert(id.to_owned()) {
-                return false;
-            }
-            let result = target.blocks.get(id).is_some_and(|block| {
-                if !matches!(
-                    block.opcode.as_str(),
-                    "operator_add"
-                        | "operator_subtract"
-                        | "operator_multiply"
-                        | "operator_divide"
-                        | "operator_mod"
-                        | "operator_equals"
-                        | "operator_gt"
-                        | "operator_lt"
-                        | "operator_and"
-                        | "operator_or"
-                        | "operator_not"
-                        | "operator_round"
-                        | "operator_mathop"
-                        | "data_variable"
-                        | "math_number"
-                        | "math_integer"
-                        | "math_whole_number"
-                        | "math_positive_number"
-                        | "math_angle"
-                        | "text"
-                ) {
-                    return false;
-                }
-                if block.opcode == "data_variable" {
-                    return variable_field(block, "VARIABLE", variables)
-                        .filter(|variable| variable.numeric)
-                        .is_some_and(|variable| {
-                            slots.insert(variable.slot);
-                            true
-                        });
-                }
-                block.inputs.values().all(|input| {
-                    collect_numeric_local_slots(target, Some(input), variables, slots, active)
-                })
-            });
-            active.remove(id);
-            result
-        }
-        _ => false,
-    }
-}
-
-// lower an expression using f64 locals for variables proven numeric project-wide.
-pub(super) fn local_expression(
-    target: &ScratchTarget,
-    input: Option<&Value>,
-    variables: &HashMap<String, VariableInfo>,
-    locals: &HashMap<usize, String>,
-    fast_math: bool,
-    active: &mut HashSet<String>,
-) -> Option<LocalExpression> {
-    match input.and_then(parse_input)? {
-        InputValue::Number(value) => Some(LocalExpression {
-            code: number_literal(value),
-            kind: LocalValueKind::Number,
-        }),
-        InputValue::String(value) => Some(LocalExpression {
-            code: text_literal(value),
-            kind: LocalValueKind::Text,
-        }),
-        InputValue::VariableReference(reference) => {
-            let variable = variables.get(reference.id)?;
-            Some(LocalExpression {
-                code: locals.get(&variable.slot)?.clone(),
-                kind: LocalValueKind::Number,
-            })
-        }
-        InputValue::BlockReference(id) => {
-            if !active.insert(id.to_owned()) {
-                return None;
-            }
-            let result = target.blocks.get(id).and_then(|block| {
-                local_block_expression(target, block, variables, locals, fast_math, active)
-            });
-            active.remove(id);
-            result
-        }
-        _ => None,
-    }
-}
-
-pub(super) fn expression_argument(expression: &str) -> &str {
-    let bytes = expression.as_bytes();
-    if bytes.first() != Some(&b'(') || bytes.last() != Some(&b')') {
-        return expression;
-    }
-
-    let mut depth = 0;
-    let mut in_string = false;
-    let mut escaped = false;
-    for (index, byte) in bytes.iter().copied().enumerate() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match byte {
-            b'"' => in_string = true,
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 && index + 1 != bytes.len() {
-                    return expression;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if depth == 0 {
-        &expression[1..expression.len() - 1]
-    } else {
-        expression
-    }
-}
-
-fn local_block_expression(
-    target: &ScratchTarget,
-    block: &ScratchBlock,
-    variables: &HashMap<String, VariableInfo>,
-    locals: &HashMap<usize, String>,
-    fast_math: bool,
-    active: &mut HashSet<String>,
-) -> Option<LocalExpression> {
-    let input = |name: &str, active: &mut HashSet<String>| {
-        local_expression(
-            target,
-            block.inputs.get(name),
-            variables,
-            locals,
-            fast_math,
-            active,
-        )
-    };
-    let numeric_binary =
-        |function: &str, operator: &str, left: &str, right: &str, active: &mut HashSet<String>| {
-            let left = input(left, active)?;
-            let right = input(right, active)?;
-            let native =
-                left.kind == LocalValueKind::Number && right.kind == LocalValueKind::Number;
-            let code = if native {
-                let left = if fast_math {
-                    left.code
-                } else {
-                    format!(
-                        "scratch_number_operand({})",
-                        expression_argument(&left.code)
-                    )
-                };
-                let right = if fast_math {
-                    right.code
-                } else {
-                    format!(
-                        "scratch_number_operand({})",
-                        expression_argument(&right.code)
-                    )
-                };
-                format!("({left} {operator} {right})")
-            } else {
-                format!(
-                    "{function}({}, {})",
-                    expression_argument(&left.code),
-                    expression_argument(&right.code)
-                )
-            };
-            Some(LocalExpression {
-                code,
-                kind: LocalValueKind::Number,
-            })
-        };
-    let comparison = |function: &str,
-                      operator: &str,
-                      left_name: &str,
-                      right_name: &str,
-                      active: &mut HashSet<String>| {
-        let left = input(left_name, active)?;
-        let right = input(right_name, active)?;
-        let native = left.kind == LocalValueKind::Number
-            && right.kind == LocalValueKind::Number
-            && local_input_is_non_nan_number(
-                target,
-                block.inputs.get(left_name),
-                variables,
-                &mut HashSet::new(),
-            )
-            && local_input_is_non_nan_number(
-                target,
-                block.inputs.get(right_name),
-                variables,
-                &mut HashSet::new(),
-            );
-        Some(LocalExpression {
-            code: if native {
-                format!("{} {operator} {}", left.code, right.code)
-            } else {
-                format!("{function}({}, {})", left.code, right.code)
-            },
-            kind: LocalValueKind::Boolean,
-        })
-    };
-
-    match block.opcode.as_str() {
-        "operator_add" => numeric_binary("scratch_add", "+", "NUM1", "NUM2", active),
-        "operator_subtract" => numeric_binary("scratch_subtract", "-", "NUM1", "NUM2", active),
-        "operator_multiply" => numeric_binary("scratch_multiply", "*", "NUM1", "NUM2", active),
-        "operator_divide" => numeric_binary("scratch_divide", "/", "NUM1", "NUM2", active),
-        "operator_mod" => {
-            let left = input("NUM1", active)?;
-            let right = input("NUM2", active)?;
-            Some(LocalExpression {
-                code: format!("scratch_mod({}, {})", left.code, right.code),
-                kind: LocalValueKind::Number,
-            })
-        }
-        "operator_equals" if identical_literal_inputs(block) => Some(LocalExpression {
-            code: "true".to_owned(),
-            kind: LocalValueKind::Boolean,
-        }),
-        "operator_equals" => comparison("scratch_equals", "==", "OPERAND1", "OPERAND2", active),
-        "operator_gt" => comparison("scratch_greater_than", ">", "OPERAND1", "OPERAND2", active),
-        "operator_lt" => comparison("scratch_less_than", "<", "OPERAND1", "OPERAND2", active),
-        "operator_and" | "operator_or" => {
-            let left = local_to_bool(input("OPERAND1", active)?);
-            let right = local_to_bool(input("OPERAND2", active)?);
-            let operator = if block.opcode == "operator_and" {
-                "&&"
-            } else {
-                "||"
-            };
-            Some(LocalExpression {
-                code: format!("({left} {operator} {right})"),
-                kind: LocalValueKind::Boolean,
-            })
-        }
-        "operator_not" => Some(LocalExpression {
-            code: format!("!({})", local_to_bool(input("OPERAND", active)?)),
-            kind: LocalValueKind::Boolean,
-        }),
-        "operator_round" => Some(LocalExpression {
-            code: format!("scratch_round({})", local_to_number(input("NUM", active)?)),
-            kind: LocalValueKind::Number,
-        }),
-        "operator_mathop" => {
-            let value = input("NUM", active)?;
-            let numeric = if value.kind == LocalValueKind::Number {
-                if fast_math {
-                    value.code.clone()
-                } else {
-                    format!(
-                        "scratch_number_operand({})",
-                        expression_argument(&value.code)
-                    )
-                }
-            } else {
-                format!("scratch_to_number({})", expression_argument(&value.code))
-            };
-            let operator = field_value(block, "OPERATOR")?.as_str()?;
-            let code = match operator {
-                "sin" => format!(
-                    "{}({})",
-                    if fast_math { "fast_sin" } else { "scratch_sin" },
-                    expression_argument(&value.code)
-                ),
-                "cos" => format!(
-                    "{}({})",
-                    if fast_math { "fast_cos" } else { "scratch_cos" },
-                    expression_argument(&value.code)
-                ),
-                "tan" => format!(
-                    "{}({})",
-                    if fast_math { "fast_tan" } else { "scratch_tan" },
-                    expression_argument(&value.code)
-                ),
-                "asin" => format!(
-                    "{}({})",
-                    if fast_math {
-                        "fast_asin_degrees"
-                    } else {
-                        "scratch_asin_degrees"
-                    },
-                    expression_argument(&value.code)
-                ),
-                "acos" => format!(
-                    "{}({})",
-                    if fast_math {
-                        "fast_acos_degrees"
-                    } else {
-                        "scratch_acos_degrees"
-                    },
-                    expression_argument(&value.code)
-                ),
-                "atan" => format!(
-                    "{}({})",
-                    if fast_math {
-                        "fast_atan_degrees"
-                    } else {
-                        "scratch_atan_degrees"
-                    },
-                    expression_argument(&value.code)
-                ),
-                "abs" => format!("({numeric}).abs()"),
-                "floor" => format!("({numeric}).floor()"),
-                "ceiling" => format!("({numeric}).ceil()"),
-                "sqrt" => format!("({numeric}).sqrt()"),
-                "ln" => format!("({numeric}).ln()"),
-                "log" => format!("({numeric}).log10()"),
-                "e ^" => format!("({numeric}).exp()"),
-                "10 ^" => format!("10.0_f64.powf({numeric})"),
-                _ => return None,
-            };
-            Some(LocalExpression {
-                code,
-                kind: LocalValueKind::Number,
-            })
-        }
-        "data_variable" => {
-            let variable = variable_field(block, "VARIABLE", variables)?;
-            Some(LocalExpression {
-                code: locals.get(&variable.slot)?.clone(),
-                kind: LocalValueKind::Number,
-            })
-        }
-        "math_number"
-        | "math_integer"
-        | "math_whole_number"
-        | "math_positive_number"
-        | "math_angle" => Some(LocalExpression {
-            code: number_literal(field_value(block, "NUM")?),
-            kind: LocalValueKind::Number,
-        }),
-        "text" => Some(LocalExpression {
-            code: text_literal(field_value(block, "TEXT")?),
-            kind: LocalValueKind::Text,
-        }),
-        _ => None,
-    }
-}
-
-fn local_input_is_non_nan_number(
-    target: &ScratchTarget,
-    input: Option<&Value>,
-    variables: &HashMap<String, VariableInfo>,
-    active: &mut HashSet<String>,
-) -> bool {
-    match input.and_then(parse_input) {
-        Some(InputValue::Number(value)) => value
-            .as_f64()
-            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-            .is_some_and(|value: f64| !value.is_nan()),
-        Some(InputValue::VariableReference(reference)) => variables
-            .get(reference.id)
-            .is_some_and(|variable| variable.non_nan),
-        Some(InputValue::BlockReference(id)) => {
-            if !active.insert(id.to_owned()) {
-                return false;
-            }
-            let result = target.blocks.get(id).is_some_and(|block| {
-                if block.opcode == "data_variable" {
-                    return variable_field(block, "VARIABLE", variables)
-                        .is_some_and(|variable| variable.non_nan);
-                }
-                matches!(
-                    block.opcode.as_str(),
-                    "math_number"
-                        | "math_integer"
-                        | "math_whole_number"
-                        | "math_positive_number"
-                        | "math_angle"
-                ) && field_value(block, "NUM")
-                    .and_then(|value| {
-                        value
-                            .as_f64()
-                            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-                    })
-                    .is_some_and(|value: f64| !value.is_nan())
-            });
-            active.remove(id);
-            result
-        }
-        _ => false,
-    }
-}
-
-pub(super) fn local_to_number(value: LocalExpression) -> String {
-    match value.kind {
-        LocalValueKind::Number => value.code,
-        LocalValueKind::Boolean => format!("if {} {{ 1.0_f64 }} else {{ 0.0_f64 }}", value.code),
-        LocalValueKind::Text => format!("scratch_to_number({})", value.code),
-    }
-}
-
-pub(super) fn local_to_bool(value: LocalExpression) -> String {
-    match value.kind {
-        LocalValueKind::Boolean => value.code,
-        LocalValueKind::Number | LocalValueKind::Text => format!("scratch_bool({})", value.code),
-    }
-}
-
-// lower math reporters, keeping literal numbers direct and converting dynamic inputs at runtime.
-fn math_expression(
+pub(super) fn math_expression(
     target: &ScratchTarget,
     block: &ScratchBlock,
     variables: &HashMap<String, VariableInfo>,
@@ -1107,7 +635,7 @@ fn math_expression(
 }
 
 // return a direct numeric literal when the input is a number primitive or number reporter.
-fn numeric_literal(target: &ScratchTarget, input: Option<&Value>) -> Option<String> {
+pub(super) fn numeric_literal(target: &ScratchTarget, input: Option<&Value>) -> Option<String> {
     match input.and_then(parse_input)? {
         InputValue::Number(value) => Some(number_literal(value)),
         InputValue::BlockReference(id) => {
@@ -1128,7 +656,7 @@ fn numeric_literal(target: &ScratchTarget, input: Option<&Value>) -> Option<Stri
 
 // preserve numeric spelling for random inputs because scratch distinguishes 10 from 10.0.
 // lower fixed random bounds once while preserving scratch's integer-range decision.
-fn random_expression(
+pub(super) fn random_expression(
     target: &ScratchTarget,
     block: &ScratchBlock,
     variables: &HashMap<String, VariableInfo>,
@@ -1163,7 +691,7 @@ fn random_expression(
     )
 }
 
-pub(super) fn constant_random_bounds(
+pub(in crate::rust) fn constant_random_bounds(
     target: &ScratchTarget,
     block: &ScratchBlock,
 ) -> Option<(f64, f64, bool)> {
@@ -1175,9 +703,12 @@ pub(super) fn constant_random_bounds(
     Some((from, to, from_integer && to_integer))
 }
 
-fn constant_random_bound(target: &ScratchTarget, input: Option<&Value>) -> Option<(f64, bool)> {
+pub(super) fn constant_random_bound(
+    target: &ScratchTarget,
+    input: Option<&Value>,
+) -> Option<(f64, bool)> {
     let spelling = match input.and_then(parse_input)? {
-        InputValue::Number(value) => random_literal_spelling(&value)?,
+        InputValue::Number(value) => random_literal_spelling(value)?,
         InputValue::BlockReference(id) => {
             let block = target.blocks.get(id)?;
             let field = match block.opcode.as_str() {
@@ -1205,14 +736,14 @@ fn constant_random_bound(target: &ScratchTarget, input: Option<&Value>) -> Optio
         .then_some((number, !spelling.contains('.')))
 }
 
-fn random_literal_spelling(value: &Value) -> Option<String> {
+pub(super) fn random_literal_spelling(value: &Value) -> Option<String> {
     value
         .as_str()
         .map(str::to_owned)
         .or_else(|| value.as_number().map(|number| number.to_string()))
 }
 
-fn random_argument(
+pub(super) fn random_argument(
     target: &ScratchTarget,
     input: Option<&Value>,
     variables: &HashMap<String, VariableInfo>,
@@ -1223,7 +754,7 @@ fn random_argument(
     match input.and_then(parse_input) {
         Some(InputValue::Number(value)) => value
             .as_str()
-            .map(|text| quote(text))
+            .map(quote)
             .or_else(|| value.as_number().map(|number| quote(&number.to_string())))
             .unwrap_or_else(|| expression(target, input, variables, lists, arguments, active)),
         Some(InputValue::BlockReference(id)) => {
@@ -1237,14 +768,13 @@ fn random_argument(
                     | "math_whole_number"
                     | "math_positive_number"
                     | "math_angle"
-            ) {
-                if let Some(value) = field_value(block, "NUM") {
-                    if let Some(text) = value.as_str() {
-                        return quote(text);
-                    }
-                    if let Some(number) = value.as_number() {
-                        return quote(&number.to_string());
-                    }
+            ) && let Some(value) = field_value(block, "NUM")
+            {
+                if let Some(text) = value.as_str() {
+                    return quote(text);
+                }
+                if let Some(number) = value.as_number() {
+                    return quote(&number.to_string());
                 }
             }
             expression(target, input, variables, lists, arguments, active)
@@ -1254,217 +784,11 @@ fn random_argument(
 }
 
 // emit a typed placeholder that reports why this expression could not be lowered.
-fn unsupported_expression(reason: &str) -> String {
+pub(super) fn unsupported_expression(reason: &str) -> String {
     format!("ScratchValue::Number(todo!({}))", quote(reason))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::expression;
-    use crate::parser::ScratchTarget;
-    use serde_json::json;
-    use std::collections::{HashMap, HashSet};
-
-    #[test]
-    fn comparison_only_normalizes_canonical_integer_text() {
-        let mut target: ScratchTarget = serde_json::from_value(json!({
-            "name": "Stage", "isStage": true, "blocks": {
-                "sensor": {"opcode": "sensing_loudness"},
-                "compare": {"opcode": "operator_gt", "inputs": {"OPERAND1": [2, "sensor"], "OPERAND2": [1, [10, "240"]]}}
-            }
-        })).unwrap();
-        let root = json!([2, "compare"]);
-        let generate = |target: &ScratchTarget| {
-            expression(
-                target,
-                Some(&root),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &mut HashSet::new(),
-            )
-        };
-        let generated = generate(&target);
-        assert!(generated.contains("let left = state.loudness()"));
-        assert!(generated.contains("let right = 240.0_f64"));
-        assert!(generated.contains("scratch_greater_than(left, right)"));
-        for value in ["0240", "-0", " 240", "240.0", "1000001"] {
-            target
-                .blocks
-                .get_mut("compare")
-                .unwrap()
-                .inputs
-                .insert("OPERAND2".into(), json!([1, [10, value]]));
-            assert!(generate(&target).contains(&format!("{value:?}")));
-        }
-    }
-
-    #[test]
-    fn sensing_reporter_inside_nested_operator_uses_the_shared_input_evaluator() {
-        let target: ScratchTarget = serde_json::from_value(json!({
-            "name": "Stage",
-            "isStage": true,
-            "blocks": {
-                "loudness": { "opcode": "sensing_loudness" },
-                "join": {
-                    "opcode": "operator_join",
-                    "inputs": {
-                        "STRING1": [3, "loudness", [10, "fallback"]],
-                        "STRING2": [1, [10, " dB"]]
-                    }
-                }
-            }
-        }))
-        .unwrap();
-        let root = json!([3, "join"]);
-        let generated = expression(
-            &target,
-            Some(&root),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &mut HashSet::new(),
-        );
-
-        assert!(generated.contains("state.loudness()"));
-        assert!(generated.starts_with("scratch_join("));
-        assert!(generated.contains("dB"));
-        assert!(!generated.contains("fallback"));
-    }
-
-    #[test]
-    fn project_sensing_reporters_lower_inside_join_and_comparison_inputs() {
-        let mut target: ScratchTarget = serde_json::from_value(json!({
-            "name": "Stage",
-            "isStage": true,
-            "blocks": {
-                "current": {
-                    "opcode": "sensing_current",
-                    "fields": { "CURRENTMENU": ["DAYOFWEEK", null] }
-                },
-                "days": { "opcode": "sensing_dayssince2000" },
-                "online": { "opcode": "sensing_online" },
-                "username": { "opcode": "sensing_username" },
-                "mousex": { "opcode": "sensing_mousex" },
-                "mousey": { "opcode": "sensing_mousey" },
-                "mousedown": { "opcode": "sensing_mousedown" },
-                "timer": { "opcode": "sensing_timer" },
-                "loudness": { "opcode": "sensing_loudness" },
-                "consumer": { "opcode": "operator_join" }
-            }
-        }))
-        .unwrap();
-        let cases = [
-            ("current", "state.current_day_of_week()"),
-            ("days", "state.days_since_2000()"),
-            ("online", "false"),
-            ("username", "state.username()"),
-            ("mousex", "state.mouse_x()"),
-            ("mousey", "state.mouse_y()"),
-            ("mousedown", "state.mouse_down()"),
-            ("timer", "state.project_timer_seconds(clock.now_millis())"),
-            ("loudness", "state.loudness()"),
-        ];
-
-        for (sensor, expected) in cases {
-            let consumer = target.blocks.get_mut("consumer").unwrap();
-            consumer.opcode = "operator_join".to_owned();
-            consumer.inputs = HashMap::from([
-                ("STRING1".to_owned(), json!([3, sensor])),
-                ("STRING2".to_owned(), json!([1, [10, ""]])),
-            ]);
-            let join = expression(
-                &target,
-                Some(&json!([3, "consumer"])),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &mut HashSet::new(),
-            );
-            assert!(join.starts_with("scratch_join("));
-            assert!(join.contains(expected), "{sensor} missing in {join}");
-
-            let consumer = target.blocks.get_mut("consumer").unwrap();
-            consumer.opcode = "operator_equals".to_owned();
-            consumer.inputs = HashMap::from([
-                ("OPERAND1".to_owned(), json!([3, sensor])),
-                ("OPERAND2".to_owned(), json!([1, [10, ""]])),
-            ]);
-            let comparison = expression(
-                &target,
-                Some(&json!([3, "consumer"])),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &mut HashSet::new(),
-            );
-            assert!(comparison.starts_with("scratch_equals("));
-            assert!(
-                comparison.contains(expected),
-                "{sensor} missing in {comparison}"
-            );
-        }
-    }
-
-    // preserve every selector choice and scratch's default before a list consumer interprets it.
-    #[test]
-    fn list_index_dropdowns_keep_scratch_values_and_default_to_one() {
-        let cases = [
-            ("data_listindexall", "1", "1"),
-            ("data_listindexall", "last", "last"),
-            ("data_listindexall", "all", "all"),
-            ("data_listindexrandom", "1", "1"),
-            ("data_listindexrandom", "last", "last"),
-            ("data_listindexrandom", "random", "random"),
-        ];
-
-        for (opcode, selected, expected) in cases {
-            let target: ScratchTarget = serde_json::from_value(json!({
-                "name": "Stage",
-                "isStage": true,
-                "blocks": {
-                    "selector": {
-                        "opcode": opcode,
-                        "fields": { "INDEX": [selected, null] }
-                    }
-                }
-            }))
-            .unwrap();
-            let generated = expression(
-                &target,
-                Some(&json!([3, "selector"])),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &mut HashSet::new(),
-            );
-
-            assert_eq!(generated, format!("{expected:?}"), "{opcode}: {selected}");
-        }
-
-        for opcode in ["data_listindexall", "data_listindexrandom"] {
-            let target: ScratchTarget = serde_json::from_value(json!({
-                "name": "Stage",
-                "isStage": true,
-                "blocks": { "selector": { "opcode": opcode } }
-            }))
-            .unwrap();
-            let generated = expression(
-                &target,
-                Some(&json!([3, "selector"])),
-                &HashMap::new(),
-                &HashMap::new(),
-                &HashMap::new(),
-                &mut HashSet::new(),
-            );
-
-            assert_eq!(generated, "\"1\"");
-        }
-    }
-}
-
-// lower a boolean socket, using false when the Scratch socket is empty.
-pub(super) fn boolean_input(
+pub(in crate::rust) fn boolean_input(
     target: &ScratchTarget,
     block: &ScratchBlock,
     name: &str,

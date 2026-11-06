@@ -36,18 +36,6 @@ cargo build --release -p aida-runtime &&
 ./target/release/aida-runtime --turbo
 ```
 
-`--no-warp-timer` is another independent generator option. It omits automatic
-time-budget checks from warp execution while retaining explicit suspensions
-and ordinary non-warp loop yields:
-
-```sh
-cargo run --release -p aida-ast -- --no-warp-timer --runtime aida-runtime/src/program.rs path/to/project.sb3
-```
-
-The generated module selects this behavior; do not pass the option to
-`aida-runtime`. A warp loop stopped by another script may starve that script
-and remain active indefinitely.
-
 `--turbo` removes host frame pacing; it does not skip Scratch waits. The runtime
 also accepts `--fps <number>` to set a frame rate. See the [AIDA run guide](../README.md)
 for the combined launcher and more examples.
@@ -80,8 +68,7 @@ The Rust backend currently executes these supported groups:
   `control_stop` options, clone creation/deletion, and custom procedure calls,
   including warp procedures.
 - **Events:** green-flag, broadcast, broadcast-and-wait, clone-start, key-press,
-  and backdrop-switch scripts. Click and greater-than sensor hats do not yet
-  start scripts.
+  sprite/stage click, greater-than sensor, and backdrop-switch scripts.
 - **Data:** shared stage variables, sprite-local and clone-local variables,
   lists, and list monitor visibility. Dynamic show/hide blocks for scalar
   variable monitors are not implemented.
@@ -115,3 +102,24 @@ These links go to the implementation used by this repository:
 
 The implementation is under active development; the source and guides above
 describe the current code rather than promising support for every Scratch block.
+
+## Rust generator layout
+
+The Rust backend is grouped by compiler responsibility:
+
+- `src/rust/project/` analyzes project identifiers and state, gathers monitors,
+  selects runtime imports, and assembles the generated program.
+- `src/rust/scripts/` discovers event hats and emits script starters and
+  procedure signatures.
+- `src/rust/statements/` builds script graphs and generates direct procedures,
+  resumable statements, opcode dispatch, structured control flow, and loop
+  optimizations.
+- `src/rust/expressions/` handles general Scratch reporters separately from
+  proven-native local numeric expressions.
+- `src/rust/direct_numeric.rs` and `src/rust/literals.rs` keep specialized
+  numeric generation and shared Rust literal formatting focused.
+- `src/rust/tests/` groups generator tests by control flow, data, events,
+  expressions, procedures, rendering, and overall generation.
+
+The general and optimized expression/statement paths remain distinct where
+they preserve Scratch coercion rules or avoid work in generated hot loops.

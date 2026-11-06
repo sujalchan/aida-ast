@@ -524,10 +524,10 @@ impl<'a> TargetGenerator<'a> {
 
     fn list_index(&self, input: Option<&Value>, active: &mut HashSet<String>) -> Expression {
         // Scratch saves its special list selectors in numeric shadow slots.
-        if let Some(InputValue::Number(value)) = input.and_then(parse_input) {
-            if matches!(value.as_str(), Some("last" | "all" | "random" | "any")) {
-                return text_literal(value);
-            }
+        if let Some(InputValue::Number(value)) = input.and_then(parse_input)
+            && matches!(value.as_str(), Some("last" | "all" | "random" | "any"))
+        {
+            return text_literal(value);
         }
         self.input_expression(input, active)
     }
@@ -550,20 +550,21 @@ impl<'a> TargetGenerator<'a> {
                 target.variables.contains_key(id)
             }
         };
-        if let Some(id) = id {
-            if contains(self.target, id) {
-                if let Some(name) = self.names.get(id) {
-                    return name.clone();
-                }
-            } else if self.stage.is_some_and(|stage| contains(stage, id)) {
-                if let Some(name) = self.global_names.get(id) {
-                    return if self.names.values().any(|local| local == name) {
-                        format!("global.{name}")
-                    } else {
-                        name.clone()
-                    };
-                }
+        if let Some(id) = id
+            && contains(self.target, id)
+        {
+            if let Some(name) = self.names.get(id) {
+                return name.clone();
             }
+        } else if let Some(id) = id
+            && self.stage.is_some_and(|stage| contains(stage, id))
+            && let Some(name) = self.global_names.get(id)
+        {
+            return if self.names.values().any(|local| local == name) {
+                format!("global.{name}")
+            } else {
+                name.clone()
+            };
         }
         identifier(fallback)
     }
@@ -652,10 +653,10 @@ fn number_literal(value: &Value) -> Expression {
             return Expression::atom(number.to_string());
         }
         // Normalize spellings such as +5, 05 and .5 to valid numeric literals.
-        if let Ok(number) = text.parse::<f64>() {
-            if number.is_finite() {
-                return Expression::atom(number.to_string());
-            }
+        if let Ok(number) = text.parse::<f64>()
+            && number.is_finite()
+        {
+            return Expression::atom(number.to_string());
         }
     }
     Expression::unknown("invalid numeric literal")

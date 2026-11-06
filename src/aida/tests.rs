@@ -391,12 +391,10 @@ fn handles_missing_inputs_invalid_references_and_cycles() {
     );
     assert!(render_expression(&target, "expression-cycle").contains("cyclic expression reference"));
     assert_eq!(render_expression(&target, "missing-input"), "!false");
-    for id in ["invalid-input"] {
-        assert_eq!(
-            render_expression(&target, id),
-            "!unknown(\"missing or invalid input\")"
-        );
-    }
+    assert_eq!(
+        render_expression(&target, "invalid-input"),
+        "!unknown(\"missing or invalid input\")"
+    );
     let mut project = ScratchProject {
         targets: vec![target],
         monitors: vec![],

@@ -27,6 +27,8 @@ struct NumericExpr {
 struct Compiler<'a> {
     target: &'a ScratchTarget,
     variables: &'a HashMap<String, VariableInfo>,
+    argument_values: &'a HashMap<String, String>,
+    lists: &'a HashMap<String, ListInfo>,
     arguments: HashMap<String, usize>,
     all: BTreeMap<usize, VariableInfo>,
     needed: BTreeMap<usize, VariableInfo>,
@@ -212,8 +214,6 @@ impl<'a> Compiler<'a> {
         out: &mut String,
         indent: usize,
         seen: &mut HashSet<String>,
-        args: &HashMap<String, String>,
-        lists: &HashMap<String, ListInfo>,
     ) -> Option<()> {
         while let Some(current) = id {
             if !seen.insert(current.to_owned()) {
@@ -237,27 +237,11 @@ impl<'a> Compiler<'a> {
                             })
                     };
                     let mut yes = written.clone();
-                    self.chain(
-                        branch("SUBSTACK"),
-                        &mut yes,
-                        out,
-                        indent + 1,
-                        seen,
-                        args,
-                        lists,
-                    )?;
+                    self.chain(branch("SUBSTACK"), &mut yes, out, indent + 1, seen)?;
                     let mut no = written.clone();
                     if block.opcode == "control_if_else" {
                         line(out, indent, "} else {");
-                        self.chain(
-                            branch("SUBSTACK2"),
-                            &mut no,
-                            out,
-                            indent + 1,
-                            seen,
-                            args,
-                            lists,
-                        )?;
+                        self.chain(branch("SUBSTACK2"), &mut no, out, indent + 1, seen)?;
                     }
                     line(out, indent, "}");
                     *written = yes.intersection(&no).copied().collect();
@@ -321,8 +305,8 @@ impl<'a> Compiler<'a> {
                             self.target,
                             input,
                             self.variables,
-                            lists,
-                            args,
+                            self.lists,
+                            self.argument_values,
                             &mut HashSet::new(),
                         );
                         let setter = if variable.is_stage {
@@ -426,6 +410,8 @@ pub(super) fn generate_numeric_direct(
     let mut compiler = Compiler {
         target,
         variables,
+        argument_values: &argument_values,
+        lists,
         arguments: args,
         all: BTreeMap::new(),
         needed: BTreeMap::new(),
@@ -442,8 +428,6 @@ pub(super) fn generate_numeric_direct(
         &mut body,
         1,
         &mut HashSet::new(),
-        &argument_values,
-        lists,
     )?;
     // Avoid creating extra versions of tiny procedures. Numeric calculation
     // and branch-only procedures benefit too; they need not contain motion.

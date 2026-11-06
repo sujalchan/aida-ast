@@ -41,12 +41,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             return compile_tests(fast_math);
         }
         Some("--runtime") => {
-            let output = args.next().ok_or(
-                "usage: aida-ast [--fast-math] --runtime <output.rs> <input.sb3>",
-            )?;
-            let input = args.next().ok_or(
-                "usage: aida-ast [--fast-math] --runtime <output.rs> <input.sb3>",
-            )?;
+            let output = args
+                .next()
+                .ok_or("usage: aida-ast [--fast-math] --runtime <output.rs> <input.sb3>")?;
+            let input = args
+                .next()
+                .ok_or("usage: aida-ast [--fast-math] --runtime <output.rs> <input.sb3>")?;
             if args.next().is_some() {
                 return Err(
                     "usage: aida-ast [--fast-math] --runtime <output.rs> <input.sb3>".into(),

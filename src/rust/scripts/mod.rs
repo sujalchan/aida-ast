@@ -19,24 +19,22 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use serde_json::Value;
 
-use crate::parser::{InputValue, ScratchProject, ScratchTarget, parse_input};
+use crate::parser::{ScratchProject, ScratchTarget};
 
 use super::{
     expressions::expression,
     literals::{line, quote},
     project::{ListInfo, VariableInfo, rust_identifier},
-    statements::{generate_direct_procedures, generate_resumable_script},
+    statements::{
+        DirectProcedureOptions, ResumableScriptOptions, generate_direct_procedures,
+        generate_resumable_script,
+    },
 };
 
-#[derive(Clone)]
-pub(super) struct ProcedureSignature {
-    pub(super) frame_id: usize,
-    pub(super) definition_id: String,
-    pub(super) proccode: String,
-    pub(super) argument_ids: Vec<String>,
-    pub(super) argument_names: Vec<String>,
-    pub(super) warp: bool,
-}
+mod procedures;
+
+pub(super) use procedures::ProcedureSignature;
+use procedures::procedure_signatures;
 
 // emit a script enum and one step function for each supported event hat.
 pub(super) fn generate_green_flag_functions(
@@ -210,12 +208,14 @@ pub(super) fn generate_green_flag_functions(
         if emitted_targets.insert(script.target_index) {
             generate_direct_procedures(
                 script.target,
-                script.target_index,
                 variables,
                 lists,
                 &procedures,
-                fast_math,
-                no_warp_timer,
+                DirectProcedureOptions {
+                    target_index: script.target_index,
+                    fast_math,
+                    no_warp_timer,
+                },
                 output,
             );
         }
@@ -225,10 +225,12 @@ pub(super) fn generate_green_flag_functions(
             variables,
             lists,
             &procedures,
-            &script.function,
-            script.target_index,
-            fast_math,
-            no_warp_timer,
+            ResumableScriptOptions {
+                function_name: &script.function,
+                target_index: script.target_index,
+                fast_math,
+                no_warp_timer,
+            },
             output,
         );
         line(
@@ -276,6 +278,7 @@ pub(super) fn generate_scripts(
     variables: &HashMap<String, VariableInfo>,
     lists: &HashMap<String, ListInfo>,
     no_warp_timer: bool,
+    uses_clones: bool,
     output: &mut String,
 ) {
     let scripts = event_scripts(project, variables, lists);
@@ -415,31 +418,34 @@ pub(super) fn generate_scripts(
         ),
     );
     generate_click_hat_starter(&scripts, output);
-    let mut clone_targets = Vec::new();
-    for target_index in 0..project.targets.len() {
-        let values = scripts
-            .iter()
-            .filter(|script| {
-                script.target_index == target_index && script.hat.opcode == "control_start_as_clone"
-            })
-            .map(|script| format!("new_{}(_instance)", script.function))
-            .collect::<Vec<_>>();
-        if !values.is_empty() {
-            clone_targets.push(format!("{target_index} => vec![{}]", values.join(", ")));
+    if uses_clones {
+        let mut clone_targets = Vec::new();
+        for target_index in 0..project.targets.len() {
+            let values = scripts
+                .iter()
+                .filter(|script| {
+                    script.target_index == target_index
+                        && script.hat.opcode == "control_start_as_clone"
+                })
+                .map(|script| format!("new_{}(_instance)", script.function))
+                .collect::<Vec<_>>();
+            if !values.is_empty() {
+                clone_targets.push(format!("{target_index} => vec![{}]", values.join(", ")));
+            }
         }
+        let clone_arms = if clone_targets.is_empty() {
+            "_ => Vec::new()".to_owned()
+        } else {
+            format!("{}, _ => Vec::new()", clone_targets.join(", "))
+        };
+        line(
+            output,
+            0,
+            &format!(
+                "fn new_clone_scripts(target: usize, _instance: usize) -> Vec<GeneratedScript> {{ match target {{ {clone_arms} }} }}\n"
+            ),
+        );
     }
-    let clone_arms = if clone_targets.is_empty() {
-        "_ => Vec::new()".to_owned()
-    } else {
-        format!("{}, _ => Vec::new()", clone_targets.join(", "))
-    };
-    line(
-        output,
-        0,
-        &format!(
-            "fn new_clone_scripts(target: usize, _instance: usize) -> Vec<GeneratedScript> {{ match target {{ {clone_arms} }} }}\n"
-        ),
-    );
 
     let uses_warp_budget_expired = output.contains("script.warp_budget_expired(");
     let uses_yield_at_safe_point = output.contains("script.yield_at_safe_point(");
@@ -685,59 +691,6 @@ fn broadcast_message(
     id.and_then(|id| stage.broadcasts.get(id))
         .cloned()
         .or_else(|| Some(name.to_owned()))
-}
-
-pub(super) fn procedure_signatures(target: &ScratchTarget) -> Vec<ProcedureSignature> {
-    let mut definitions: Vec<_> = target
-        .blocks
-        .iter()
-        .filter(|(_, block)| block.opcode == "procedures_definition")
-        .collect();
-    definitions.sort_by(|(left_id, _), (right_id, _)| left_id.cmp(right_id));
-
-    let mut procedures = Vec::new();
-    for (definition_id, definition) in definitions {
-        let Some(InputValue::BlockReference(prototype_id)) =
-            definition.inputs.get("custom_block").and_then(parse_input)
-        else {
-            continue;
-        };
-        let Some(prototype) = target.blocks.get(prototype_id) else {
-            continue;
-        };
-        let Some(mutation) = prototype.mutation.as_object() else {
-            continue;
-        };
-        let Some(proccode) = mutation.get("proccode").and_then(Value::as_str) else {
-            continue;
-        };
-
-        let argument_names = parse_string_array(mutation.get("argumentnames"));
-        let argument_ids = parse_string_array(mutation.get("argumentids"));
-        procedures.push(ProcedureSignature {
-            frame_id: procedures.len() + 1,
-            definition_id: definition_id.to_owned(),
-            proccode: proccode.to_owned(),
-            argument_ids,
-            argument_names,
-            warp: mutation
-                .get("warp")
-                .and_then(|value| {
-                    value
-                        .as_bool()
-                        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
-                })
-                .unwrap_or(false),
-        });
-    }
-    procedures
-}
-
-fn parse_string_array(value: Option<&Value>) -> Vec<String> {
-    value
-        .and_then(Value::as_str)
-        .and_then(|encoded| serde_json::from_str::<Vec<String>>(encoded).ok())
-        .unwrap_or_default()
 }
 
 fn event_hats(target: &ScratchTarget) -> Vec<(&str, &crate::parser::ScratchBlock)> {
